@@ -31,6 +31,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        # اخطار Node.js 20 مشکلی ایجاد نمی‌کند و تا سال ۲۰۲۶ معتبر است
+        # در صورت نیاز می‌توانید از v5 استفاده کنید یا متغیر محیطی زیر را تنظیم کنید:
+        # env:
+        #   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
       - name: Setup yt-dlp and FFmpeg
         uses: AnimMouse/setup-yt-dlp@v3
@@ -42,23 +46,48 @@ jobs:
         id: quality
         run: |
           case "${{ github.event.inputs.video_quality }}" in
-            "best (بدون محدودیت کیفیت)") echo "selected_format=bestvideo+bestaudio/best" ;;
-            "2160p (4K)") echo "selected_format=bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best" ;;
-            "1440p (2K)") echo "selected_format=bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best" ;;
-            "1080p") echo "selected_format=bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best" ;;
-            "720p") echo "selected_format=bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best" ;;
-            "480p") echo "selected_format=bestvideo[height<=480]+bestaudio/bestvideo+bestaudio/best" ;;
-            "360p") echo "selected_format=bestvideo[height<=360]+bestaudio/bestvideo+bestaudio/best" ;;
-            "bestaudio (فقط صدا)") echo "selected_format=bestaudio/best" ;;
-          esac >> $GITHUB_OUTPUT
+            "best (بدون محدودیت کیفیت)")
+              SELECTED_FORMAT="bestvideo+bestaudio/best"
+              ;;
+            "2160p (4K)")
+              SELECTED_FORMAT="bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best"
+              ;;
+            "1440p (2K)")
+              SELECTED_FORMAT="bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best"
+              ;;
+            "1080p")
+              SELECTED_FORMAT="bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best"
+              ;;
+            "720p")
+              SELECTED_FORMAT="bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best"
+              ;;
+            "480p")
+              SELECTED_FORMAT="bestvideo[height<=480]+bestaudio/bestvideo+bestaudio/best"
+              ;;
+            "360p")
+              SELECTED_FORMAT="bestvideo[height<=360]+bestaudio/bestvideo+bestaudio/best"
+              ;;
+            "bestaudio (فقط صدا)")
+              SELECTED_FORMAT="bestaudio/best"
+              ;;
+            *)
+              SELECTED_FORMAT="bestvideo+bestaudio/best"
+              ;;
+          esac
+          # ذخیره‌سازی در متغیر محیطی برای استفاده در مراحل بعدی
+          echo "SELECTED_FORMAT=$SELECTED_FORMAT" >> $GITHUB_ENV
         shell: bash
 
-      - name: دانلود ویدیوها با سازماندهی خودکار در پوشه‌ها
+      - name: ایجاد پوشه خروجی (حتی اگر دانلودی انجام نشود)
+        run: mkdir -p channel_videos
+
+      - name: دانلود ویدیوها با سازمان‌دهی خودکار در پوشه‌ها
+        continue-on-error: true   # با وجود خطا در دانلود، فرایند بسته‌بندی انجام می‌شود
         run: |
           yt-dlp \
             --verbose \
             --output "channel_videos/%(uploader)s/%(playlist_title)s/%(playlist_index)s - %(title)s.%(ext)s" \
-            --format "${{ steps.quality.outputs.selected_format }}" \
+            --format "$SELECTED_FORMAT" \
             --merge-output-format mp4 \
             --yes-playlist \
             --ignore-errors \
@@ -70,27 +99,37 @@ jobs:
             --external-downloader-args "-x 16 -s 16 -k 2M" \
             "${{ github.event.inputs.channel_url }}"
 
-      - name: فشرده‌سازی و تقسیم خودکار فایل به حجم 2 گیگابایت
+      - name: فشرده‌سازی و تقسیم خودکار فایل به حجم ۲ گیگابایت
+        if: always()   # همیشه اجرا شود حتی اگر مرحله قبل خطا داده باشد
         run: |
           MAX_SIZE_MB=2048
-          echo "حداکثر حجم مجاز هر فایل: ${MAX_SIZE_MB} MB"
+
+          # اگر پوشه خالی است یک فایل راهنما بسازیم تا فایل zip حتماً ایجاد شود
+          if [ ! "$(ls -A channel_videos 2>/dev/null)" ]; then
+            echo "هیچ ویدیویی دانلود نشد. ساخت آرشیو خالی."
+            echo "No videos were downloaded." > channel_videos/README.md
+          fi
+
           cd channel_videos
           zip -r "../youtube-channel-videos.zip" .
           cd ..
+
           FILE_SIZE=$(stat -c%s "youtube-channel-videos.zip")
           MAX_SIZE_BYTES=$((MAX_SIZE_MB * 1024 * 1024))
           echo "حجم فایل اصلی: $((FILE_SIZE / 1024 / 1024)) MB"
+
           if [ $FILE_SIZE -gt $MAX_SIZE_BYTES ]; then
-            echo "فایل اصلی از حد مجاز بزرگ‌تر است. در حال تقسیم..."
+            echo "فایل اصلی بزرگ‌تر از حد مجاز است. در حال تقسیم..."
             split -b ${MAX_SIZE_MB}M "youtube-channel-videos.zip" "youtube-channel-videos.zip.part"
             rm -f "youtube-channel-videos.zip"
           else
-            echo "فایل اصلی در حد مجاز است. بدون تغییر نگه داشته می‌شود."
+            echo "فایل اصلی در محدودهٔ مجاز است. بدون تغییر باقی می‌ماند."
             mv "youtube-channel-videos.zip" "youtube-channel-videos.zip.parta"
           fi
           ls -la youtube-channel-videos.zip.part*
 
       - name: آپلود فایل نهایی در GitHub Actions
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: youtube-channel-videos

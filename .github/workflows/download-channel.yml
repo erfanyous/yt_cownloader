@@ -22,6 +22,7 @@ on:
           - 'best (بدون محدودیت کیفیت)'
           - 'bestaudio (فقط صدا)'
 
+# برای رفع اخطار Node.js 20 و استفاده از آخرین قابلیت‌ها
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -38,10 +39,20 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
+          # ffmpeg و aria2 برای فشرده‌سازی و تسریع دانلود
           sudo apt-get install -y ffmpeg aria2 p7zip-full
 
-      - name: Install latest yt-dlp via pip
-        run: pip install --upgrade yt-dlp
+      # 🔥 مهم: نصب deno به عنوان یک runtime جاوااسکریپت برای پشتیبانی بهتر از YouTube
+      - name: Install deno (JavaScript runtime for yt-dlp)
+        run: |
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+
+      - name: Install latest yt-dlp (nightly build)
+        run: |
+          # استفاده از نسخه شبانه برای رفع آخرین باگ‌های استخراج
+          pip install --upgrade --force-reinstall "https://github.com/yt-dlp/yt-dlp/archive/refs/heads/master.tar.gz"
+          yt-dlp --version
 
       - name: Debug inputs
         run: |
@@ -64,23 +75,35 @@ jobs:
           esac
           echo "Using yt-dlp format: $FORMAT"
           echo "selected_format=$FORMAT" >> $GITHUB_OUTPUT
+        shell: bash
 
-      # 🔥 مرحله جدید برای تست قابلیت استخراج اطلاعات کانال
+      # مرحله تست برای اطمینان از اینکه کانال قابل خواندن است
       - name: Test channel extractor (list first 5 videos)
         run: |
-          echo "Testing if yt-dlp can read the channel..."
-          yt-dlp --flat-playlist --dump-json --playlist-end 5 "${{ github.event.inputs.channel_url }}" || {
-            echo "FAILED: Could not extract video list from the channel. Aborting."
-            exit 1
-          }
-          echo "Extraction test passed."
+          echo ">>> در حال تست استخراج اطلاعات از کانال. اگر خطایی رخ دهد، در اینجا نمایش داده می‌شود."
+          yt-dlp \
+            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            --extractor-args "youtube:player_client=web" \
+            --flat-playlist \
+            --dump-json \
+            --playlist-end 5 \
+            "${{ github.event.inputs.channel_url }}" || {
+              echo "❌ FAILED: استخراج اطلاعات کانال شکست خورد. لطفاً لاگ بالا را بررسی کنید."
+              exit 1
+            }
+          echo "✅ تست استخراج با موفقیت انجام شد."
+        shell: bash
 
       - name: Download all videos from channel
         id: download
         run: |
           mkdir -p channel_videos
+          echo ">>> دانلود تمام ویدیوها با ساختار پوشه‌بندی خودکار..."
+          # اجرای دانلود و ذخیره لاگ
           yt-dlp \
             --verbose \
+            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            --extractor-args "youtube:player_client=web" \
             --output "channel_videos/%(uploader)s/%(playlist_title|No Playlist)s/%(playlist_index& |)s%(title)s.%(ext)s" \
             --format "${{ steps.quality.outputs.selected_format }}" \
             --merge-output-format mp4 \
@@ -93,35 +116,43 @@ jobs:
             --external-downloader aria2c \
             --external-downloader-args "-x 16 -s 16 -k 2M" \
             "${{ github.event.inputs.channel_url }}" 2>&1 | tee yt-dlp.log
+
+          # بررسی محتوای پوشه دانلود
           if [ ! "$(ls -A channel_videos 2>/dev/null)" ]; then
-            echo "ERROR: No videos were downloaded."
-            echo "Last 30 lines of yt-dlp log:"
+            echo "❌ ERROR: هیچ ویدیویی دانلود نشد."
+            echo "--- 30 خط آخر لاگ yt-dlp برای عیب‌یابی ---"
             tail -n 30 yt-dlp.log
             exit 1
           fi
+          echo "✅ دانلود ویدیوها کامل شد."
         shell: bash
 
       - name: Show full yt-dlp log on failure
         if: failure()
-        run: cat yt-dlp.log
+        run: |
+          echo "===== لاگ کامل yt-dlp ====="
+          cat yt-dlp.log
 
       - name: Compress and split archive
         if: success()
         run: |
           MAX_SIZE_MB=2048
+          echo ">>> فشرده‌سازی فایل‌ها..."
           cd channel_videos
           zip -r "../youtube-channel-videos.zip" .
           cd ..
           FILE_SIZE=$(stat -c%s "youtube-channel-videos.zip")
           MAX_SIZE_BYTES=$((MAX_SIZE_MB * 1024 * 1024))
-          echo "Archive size: $((FILE_SIZE / 1024 / 1024)) MB"
+          echo "حجم فایل اصلی: $((FILE_SIZE / 1024 / 1024)) مگابایت"
           if [ $FILE_SIZE -gt $MAX_SIZE_BYTES ]; then
-            echo "Splitting into ${MAX_SIZE_MB}MB parts..."
+            echo "فایل بزرگتر از حد مجاز است. در حال تقسیم به قطعات ${MAX_SIZE_MB}MB..."
             split -b ${MAX_SIZE_MB}M "youtube-channel-videos.zip" "youtube-channel-videos.zip.part"
             rm -f "youtube-channel-videos.zip"
           else
+            echo "فایل اصلی در اندازه مجاز است. بدون تغییر باقی می‌ماند."
             mv "youtube-channel-videos.zip" "youtube-channel-videos.zip.parta"
           fi
+          echo "لیست قطعات:"
           ls -lah youtube-channel-videos.zip.part*
 
       - name: Upload artifact

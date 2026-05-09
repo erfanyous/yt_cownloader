@@ -22,8 +22,8 @@ on:
           - 'best (بدون محدودیت کیفیت)'
           - 'bestaudio (فقط صدا)'
 
-# برای رفع اخطار Node.js 20 و استفاده از آخرین قابلیت‌ها
 env:
+  # از Node.js 24 برای رفع اخطارها استفاده می‌کنیم
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -33,32 +33,38 @@ jobs:
       contents: write
 
     steps:
+      # مرحله ۱: دریافت کدهای ریپازیتوری (اخطار Node.js با v5 رفع می‌شود)
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
+      # مرحله ۲: نصب ابزارهای سیستمی (ffmpeg, aria2, zip)
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          # ffmpeg و aria2 برای فشرده‌سازی و تسریع دانلود
           sudo apt-get install -y ffmpeg aria2 p7zip-full
 
-      # 🔥 مهم: نصب deno به عنوان یک runtime جاوااسکریپت برای پشتیبانی بهتر از YouTube
+      # ★ مرحله کلیدی ۳: نصب Deno (موتور جاوااسکریپت ضروری برای یوتیوب)
       - name: Install deno (JavaScript runtime for yt-dlp)
         run: |
-          curl -fsSL https://deno.land/install.sh | sh
+          curl -fsSL https://deno.land/install.sh | sh -s -- -y
           echo "$HOME/.deno/bin" >> $GITHUB_PATH
 
-      - name: Install latest yt-dlp (nightly build)
+      # ★ مرحله کلیدی ۴: نصب آخرین نسخه شبانه yt-dlp + بسته EJS
+      - name: Install latest yt-dlp with EJS support
         run: |
-          # استفاده از نسخه شبانه برای رفع آخرین باگ‌های استخراج
-          pip install --upgrade --force-reinstall "https://github.com/yt-dlp/yt-dlp/archive/refs/heads/master.tar.gz"
-          yt-dlp --version
+          # نصب yt-dlp از GitHub Releases
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+          # نصب بسته yt-dlp-ejs برای حل چالش‌های جاوااسکریپت یوتیوب
+          pip install --upgrade yt-dlp-ejs
 
+      # مرحله ۵: نمایش اطلاعات ورودی برای عیب‌یابی
       - name: Debug inputs
         run: |
           echo "Channel URL      : ${{ github.event.inputs.channel_url }}"
           echo "Selected Quality : ${{ github.event.inputs.video_quality }}"
 
+      # مرحله ۶: تبدیل کیفیت انتخابی به فرمت قابل فهم برای yt-dlp
       - name: Map quality to yt-dlp format string
         id: quality
         run: |
@@ -77,7 +83,7 @@ jobs:
           echo "selected_format=$FORMAT" >> $GITHUB_OUTPUT
         shell: bash
 
-      # مرحله تست برای اطمینان از اینکه کانال قابل خواندن است
+      # ★ مرحله ۷: تست اولیه برای اطمینان از دسترسی به کانال
       - name: Test channel extractor (list first 5 videos)
         run: |
           echo ">>> در حال تست استخراج اطلاعات از کانال. اگر خطایی رخ دهد، در اینجا نمایش داده می‌شود."
@@ -92,8 +98,8 @@ jobs:
               exit 1
             }
           echo "✅ تست استخراج با موفقیت انجام شد."
-        shell: bash
 
+      # ★ مرحله ۸: دانلود تمام ویدیوهای کانال
       - name: Download all videos from channel
         id: download
         run: |
@@ -127,12 +133,14 @@ jobs:
           echo "✅ دانلود ویدیوها کامل شد."
         shell: bash
 
+      # مرحله ۹: نمایش لاگ کامل در صورت شکست (برای عیب‌یابی)
       - name: Show full yt-dlp log on failure
         if: failure()
         run: |
           echo "===== لاگ کامل yt-dlp ====="
           cat yt-dlp.log
 
+      # مرحله ۱۰: فشرده‌سازی و تقسیم فایل‌ها
       - name: Compress and split archive
         if: success()
         run: |
@@ -155,6 +163,7 @@ jobs:
           echo "لیست قطعات:"
           ls -lah youtube-channel-videos.zip.part*
 
+      # مرحله ۱۱: آپلود فایل‌های نهایی
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4

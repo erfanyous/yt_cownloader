@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       channel_url:
-        description: 'آدرس کامل کانال یوتیوب (مثلاً https://www.youtube.com/@channelname یا https://www.youtube.com/channel/UC...)'
+        description: 'آدرس کامل کانال یوتیوب (مثلاً https://www.youtube.com/@channelname)'
         required: true
         type: string
 
@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup yt-dlp and FFmpeg
-        uses: AnimMouse/setup-yt-dlp@v3   # ✅ اصلاح شده: v5 -> v3
+        uses: AnimMouse/setup-yt-dlp@v3
         with:
           ffmpeg: true
           aria2: true
@@ -29,6 +29,7 @@ jobs:
         run: mkdir -p channel_videos
 
       - name: Download Channel Videos
+        # [IMPORTANT] دستور yt-dlp بازنویسی شده بدون علامت نقل قول اضافی
         run: |
           yt-dlp \
             --verbose \
@@ -43,7 +44,7 @@ jobs:
             --download-archive downloaded.txt \
             --external-downloader aria2c \
             --external-downloader-args "-x 16 -s 16 -k 2M" \
-            "${{ github.event.inputs.channel_url }}"
+            ${{ github.event.inputs.channel_url }}
 
       - name: List Downloaded Files
         run: ls -la channel_videos/

@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       channel_url:
-        description: 'آدرس کامل کانال یوتیوب (مثال: https://www.youtube.com/@ChannelName)'
+        description: 'آدرس دقیق کانال یوتیوب (مثل https://www.youtube.com/@Google)'
         required: true
         type: string
       video_quality:
-        description: 'حداکثر کیفیت مورد نظر را انتخاب کنید'
+        description: 'حداکثر کیفیت دلخواه'
         required: true
         type: choice
         default: '1080p'
@@ -19,153 +19,191 @@ on:
           - '720p'
           - '480p'
           - '360p'
-          - 'best (بدون محدودیت کیفیت)'
-          - 'bestaudio (فقط صدا)'
+          - 'best (بهترین کیفیت)'
 
 env:
-  # از Node.js 24 برای رفع اخطارها استفاده می‌کنیم
+  # حذف اخطار قدیمی بودن Node.js 20 و استفاده از نسخه 24
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  download-and-split:
+  download-channel:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # برای ذخیره فایل‌ها در ریپازیتوری
 
     steps:
-      # مرحله ۱: دریافت کدهای ریپازیتوری (اخطار Node.js با v5 رفع می‌شود)
-      - name: Checkout repository
-        uses: actions/checkout@v5
+      - name: دریافت کدها
+        uses: actions/checkout@v4
 
-      # مرحله ۲: نصب ابزارهای سیستمی (ffmpeg, aria2, zip)
-      - name: Install system dependencies
+      - name: نصب پیش‌نیازهای سیستمی
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg aria2 p7zip-full
+          sudo apt-get install -y ffmpeg aria2 p7zip-full curl jq python3-pip
 
-      # ★ مرحله کلیدی ۳: نصب Deno (موتور جاوااسکریپت ضروری برای یوتیوب)
-      - name: Install deno (JavaScript runtime for yt-dlp)
+      # ★ گام اول حل مشکل اصلی: نصب Deno و yt-dlp به روش اصولی
+      - name: نصب Deno و yt-dlp به همراه افزونه‌های ضروری
         run: |
-          curl -fsSL https://deno.land/install.sh | sh -s -- -y
-          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+          # 1. نصب Deno (موتور جاوااسکریپت برای عبور از قفل n-challenge)
+          curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
+          # 2. نصب yt-dlp با pip (که شامل فایل‌های EJS برای حل چالش است)
+          pip3 install --break-system-packages "yt-dlp[default]" yt-dlp-ejs
+          # 3. فقط برای اطمینان
+          echo "نسخه Deno: $(deno --version)"
+          echo "نسخه yt-dlp: $(yt-dlp --version)"
 
-      # ★ مرحله کلیدی ۴: نصب آخرین نسخه شبانه yt-dlp + بسته EJS
-      - name: Install latest yt-dlp with EJS support
+      # ★ گام دوم حل مشکل: استفاده از API و ساختاربندی دقیق پوشه‌ها
+      - name: استخراج، تبدیل و دانلود کل ویدیوهای کانال
         run: |
-          # نصب yt-dlp از GitHub Releases
-          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-          sudo chmod a+rx /usr/local/bin/yt-dlp
-          # نصب بسته yt-dlp-ejs برای حل چالش‌های جاوااسکریپت یوتیوب
-          pip install --upgrade yt-dlp-ejs
+          python3 << 'PYEOF'
+          import os, sys, json, time, re, subprocess, shutil
+          import requests
 
-      # مرحله ۵: نمایش اطلاعات ورودی برای عیب‌یابی
-      - name: Debug inputs
-        run: |
-          echo "Channel URL      : ${{ github.event.inputs.channel_url }}"
-          echo "Selected Quality : ${{ github.event.inputs.video_quality }}"
+          # ========== 1. دریافت اطلاعات ورودی از کاربر ==========
+          CHANNEL_URL = "${{ github.event.inputs.channel_url }}"
+          QUALITY_MAP = {
+              "best (بهترین کیفیت)": "1080p",
+              "2160p (4K)": "2160p",
+              "1440p (2K)": "1440p",
+              "1080p": "1080p",
+              "720p": "720p",
+              "480p": "480p",
+              "360p": "360p"
+          }
+          SELECTED_QUALITY = "${{ github.event.inputs.video_quality }}"
+          TARGET_QUALITY = QUALITY_MAP.get(SELECTED_QUALITY, "720p")
+          
+          # ========== 2. استخراج لیست ویدیوها با yt-dlp ==========
+          print(">> در حال دریافت لیست ویدیوهای کانال...")
+          # استفاده از flat-playlist برای سرعت و جلوگیری از دانلود ناخواسته
+          cmd = [
+              "yt-dlp",
+              "--flat-playlist",
+              "--dump-json",
+              CHANNEL_URL
+          ]
+          try:
+              result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+              videos = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+              print(f">> {len(videos)} ویدیو پیدا شد.")
+          except Exception as e:
+              print(f"خطا در دریافت لیست ویدیوها: {e}")
+              sys.exit(1)
 
-      # مرحله ۶: تبدیل کیفیت انتخابی به فرمت قابل فهم برای yt-dlp
-      - name: Map quality to yt-dlp format string
-        id: quality
-        run: |
-          case "${{ github.event.inputs.video_quality }}" in
-            "best (بدون محدودیت کیفیت)")   FORMAT="bestvideo+bestaudio/best" ;;
-            "2160p (4K)")                    FORMAT="bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best" ;;
-            "1440p (2K)")                    FORMAT="bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best" ;;
-            "1080p")                         FORMAT="bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best" ;;
-            "720p")                          FORMAT="bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best" ;;
-            "480p")                          FORMAT="bestvideo[height<=480]+bestaudio/bestvideo+bestaudio/best" ;;
-            "360p")                          FORMAT="bestvideo[height<=360]+bestaudio/bestvideo+bestaudio/best" ;;
-            "bestaudio (فقط صدا)")           FORMAT="bestaudio/best" ;;
-            *)                               FORMAT="bestvideo+bestaudio/best" ;;
-          esac
-          echo "Using yt-dlp format: $FORMAT"
-          echo "selected_format=$FORMAT" >> $GITHUB_OUTPUT
+          if not videos:
+              print("هیچ ویدیویی پیدا نشد.")
+              sys.exit(0)
+
+          # ========== 3. حلقه اصلی: تبدیل و دانلود هر ویدیو ==========
+          # آماده‌سازی پوشه‌ها
+          BASE_DIR = "channel_videos"
+          os.makedirs(BASE_DIR, exist_ok=True)
+          
+          # هدرهای معتبر برای جا زدن خود بعنوان مرورگر (الگوبرداری از erfanyous)
+          HEADERS = {
+              "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+              "Accept": "application/json",
+              "Referer": "https://media.ytmp3.gg/",
+              "Content-Type": "application/json",
+              "Origin": "https://media.ytmp3.gg"
+          }
+          API_ENDPOINT = "https://hub.ytconvert.org/api/download"
+
+          for idx, video in enumerate(videos):
+              video_url = video.get('url')
+              if not video_url:
+                  continue
+              video_id = video.get('id', f"unknown_{idx}")
+              title = video.get('title', f"video_{idx}").replace('/', '_').replace(':', '_')[:60]
+              
+              # تعیین پوشه مقصد بر اساس پلی‌لیست یا بدون پلی‌لیست
+              playlist_title = video.get('playlist_title', 'No Playlist').replace('/', '_')
+              if not playlist_title or playlist_title == 'NA':
+                  playlist_title = "No Playlist"
+              
+              # ساخت مسیر نهایی
+              target_dir = os.path.join(BASE_DIR, playlist_title)
+              os.makedirs(target_dir, exist_ok=True)
+              
+              # نام فایل خروجی
+              safe_title = re.sub(r'[^a-zA-Z0-9\-_\.]', '_', title)
+              filename = f"{safe_title}_{video_id}_{TARGET_QUALITY}.mp4"
+              filepath = os.path.join(target_dir, filename)
+
+              # اگر فایل از قبل وجود داشت، رد می‌کنیم
+              if os.path.exists(filepath):
+                  print(f"[{idx+1}/{len(videos)}] ✓ از قبل موجود بود: {title}")
+                  continue
+
+              print(f"[{idx+1}/{len(videos)}] در حال درخواست تبدیل: {title}")
+              
+              # مرحله اول: درخواست تبدیل به API
+              payload = {
+                  "url": video_url,
+                  "os": "linux",
+                  "output": {"type": "video", "format": "mp4", "quality": TARGET_QUALITY}
+              }
+
+              try:
+                  response = requests.post(API_ENDPOINT, json=payload, headers=HEADERS, timeout=30)
+                  response.raise_for_status()
+                  data = response.json()
+                  status_url = data.get('statusUrl')
+                  if not status_url:
+                      print(f"  ⚠️ API پاسخی نداد. رد شد.")
+                      continue
+
+                  # مرحله دوم: انتظار برای تکمیل تبدیل (حداکثر 90 ثانیه)
+                  download_url = None
+                  for attempt in range(45): # 45 * 2s = 90s
+                      time.sleep(2)
+                      status_resp = requests.get(status_url, headers=HEADERS, timeout=15)
+                      status_data = status_resp.json()
+                      if status_data.get('status') == 'completed':
+                          download_url = status_data.get('downloadUrl')
+                          break
+                      elif status_data.get('status') == 'failed':
+                          print(f"  ❌ تبدیل ناموفق بود.")
+                          break
+                  
+                  if not download_url:
+                      print(f"  ⏱️ زمان انتظار به پایان رسید.")
+                      continue
+
+                  # مرحله سوم: دانلود فایل نهایی
+                  print(f"  ⬇️ در حال دانلود...")
+                  dl_response = requests.get(download_url, headers=HEADERS, stream=True, timeout=300)
+                  with open(filepath, 'wb') as f:
+                      for chunk in dl_response.iter_content(chunk_size=8192):
+                          f.write(chunk)
+                  print(f"  ✅ با موفقیت دانلود شد: {filename}")
+
+              except Exception as e:
+                  print(f"  🔥 خطای غیرمنتظره: {e}")
+                  continue
+
+          print("دانلود همه ویدیوها به پایان رسید.")
+          PYEOF
         shell: bash
 
-      # ★ مرحله ۷: تست اولیه برای اطمینان از دسترسی به کانال
-      - name: Test channel extractor (list first 5 videos)
-        run: |
-          echo ">>> در حال تست استخراج اطلاعات از کانال. اگر خطایی رخ دهد، در اینجا نمایش داده می‌شود."
-          yt-dlp \
-            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            --extractor-args "youtube:player_client=web" \
-            --flat-playlist \
-            --dump-json \
-            --playlist-end 5 \
-            "${{ github.event.inputs.channel_url }}" || {
-              echo "❌ FAILED: استخراج اطلاعات کانال شکست خورد. لطفاً لاگ بالا را بررسی کنید."
-              exit 1
-            }
-          echo "✅ تست استخراج با موفقیت انجام شد."
-
-      # ★ مرحله ۸: دانلود تمام ویدیوهای کانال
-      - name: Download all videos from channel
-        id: download
-        run: |
-          mkdir -p channel_videos
-          echo ">>> دانلود تمام ویدیوها با ساختار پوشه‌بندی خودکار..."
-          # اجرای دانلود و ذخیره لاگ
-          yt-dlp \
-            --verbose \
-            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            --extractor-args "youtube:player_client=web" \
-            --output "channel_videos/%(uploader)s/%(playlist_title|No Playlist)s/%(playlist_index& |)s%(title)s.%(ext)s" \
-            --format "${{ steps.quality.outputs.selected_format }}" \
-            --merge-output-format mp4 \
-            --yes-playlist \
-            --ignore-errors \
-            --no-overwrites \
-            --continue \
-            --extract-archive downloaded.txt \
-            --download-archive downloaded.txt \
-            --external-downloader aria2c \
-            --external-downloader-args "-x 16 -s 16 -k 2M" \
-            "${{ github.event.inputs.channel_url }}" 2>&1 | tee yt-dlp.log
-
-          # بررسی محتوای پوشه دانلود
-          if [ ! "$(ls -A channel_videos 2>/dev/null)" ]; then
-            echo "❌ ERROR: هیچ ویدیویی دانلود نشد."
-            echo "--- 30 خط آخر لاگ yt-dlp برای عیب‌یابی ---"
-            tail -n 30 yt-dlp.log
-            exit 1
-          fi
-          echo "✅ دانلود ویدیوها کامل شد."
-        shell: bash
-
-      # مرحله ۹: نمایش لاگ کامل در صورت شکست (برای عیب‌یابی)
-      - name: Show full yt-dlp log on failure
-        if: failure()
-        run: |
-          echo "===== لاگ کامل yt-dlp ====="
-          cat yt-dlp.log
-
-      # مرحله ۱۰: فشرده‌سازی و تقسیم فایل‌ها
-      - name: Compress and split archive
-        if: success()
+      - name: بسته‌بندی و تقسیم فایل‌ها
         run: |
           MAX_SIZE_MB=2048
-          echo ">>> فشرده‌سازی فایل‌ها..."
           cd channel_videos
           zip -r "../youtube-channel-videos.zip" .
           cd ..
           FILE_SIZE=$(stat -c%s "youtube-channel-videos.zip")
           MAX_SIZE_BYTES=$((MAX_SIZE_MB * 1024 * 1024))
-          echo "حجم فایل اصلی: $((FILE_SIZE / 1024 / 1024)) مگابایت"
+          echo "حجم کل فایل: $((FILE_SIZE / 1024 / 1024)) مگابایت"
           if [ $FILE_SIZE -gt $MAX_SIZE_BYTES ]; then
-            echo "فایل بزرگتر از حد مجاز است. در حال تقسیم به قطعات ${MAX_SIZE_MB}MB..."
+            echo "فایل حجیم است. در حال تقسیم به بخش‌های ${MAX_SIZE_MB}MB..."
             split -b ${MAX_SIZE_MB}M "youtube-channel-videos.zip" "youtube-channel-videos.zip.part"
             rm -f "youtube-channel-videos.zip"
           else
-            echo "فایل اصلی در اندازه مجاز است. بدون تغییر باقی می‌ماند."
             mv "youtube-channel-videos.zip" "youtube-channel-videos.zip.parta"
           fi
-          echo "لیست قطعات:"
           ls -lah youtube-channel-videos.zip.part*
 
-      # مرحله ۱۱: آپلود فایل‌های نهایی
-      - name: Upload artifact
-        if: success()
+      - name: آپلود فایل‌های نهایی در ریپازیتوری
         uses: actions/upload-artifact@v4
         with:
           name: youtube-channel-videos

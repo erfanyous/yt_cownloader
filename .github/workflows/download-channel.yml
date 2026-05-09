@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup yt-dlp and FFmpeg
-        uses: AnimMouse/setup-yt-dlp@v5
+        uses: AnimMouse/setup-yt-dlp@v3   # ✅ اصلاح شده: v5 -> v3
         with:
           ffmpeg: true
           aria2: true

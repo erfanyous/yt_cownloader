@@ -4,30 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       channel_url:
-        description: 'آدرس کامل کانال یوتیوب'
+        description: 'آدرس کامل کانال یوتیوب (مثال: https://www.youtube.com/@ChannelName)'
         required: true
         type: string
-        default: 'https://www.youtube.com/@fereidounsabetghadam8482'
-        # 👆 این آدرس پیش‌فرض است، می‌توانید آن را عوض کنید یا خالی بگذارید.
       video_quality:
-        description: 'کیفیت ویدیو را انتخاب کنید'
+        description: 'حداکثر کیفیت مورد نظر را انتخاب کنید'
         required: true
         type: choice
-        default: 'best'
+        default: '1080p'
         options:
-          - 'best (بهترین کیفیت ممکن)'
           - '2160p (4K)'
           - '1440p (2K)'
           - '1080p'
           - '720p'
           - '480p'
           - '360p'
-          - 'bestaudio (فقط دانلود صدا)'
-      split_size:
-        description: 'حداکثر حجم هر فایل فشرده (مثال: 1900M)'
-        required: false
-        type: string
-        default: '1900M'
+          - 'best (بدون محدودیت کیفیت)'
+          - 'bestaudio (فقط صدا)'
 
 jobs:
   download-and-split:
@@ -43,27 +36,29 @@ jobs:
         uses: AnimMouse/setup-yt-dlp@v3
         with:
           ffmpeg: true
+          aria2: true
 
-      - name: انتخاب فرمت کیفیت
+      - name: ساخت فرمت انتخابی هوشمند برای yt-dlp
         id: quality
         run: |
           case "${{ github.event.inputs.video_quality }}" in
-            "best (بهترین کیفیت ممکن)") echo "format=bestvideo+bestaudio/best" ;;
-            "2160p (4K)") echo "format=bestvideo[height<=2160]+bestaudio/best[height<=2160]" ;;
-            "1440p (2K)") echo "format=bestvideo[height<=1440]+bestaudio/best[height<=1440]" ;;
-            "1080p") echo "format=bestvideo[height<=1080]+bestaudio/best[height<=1080]" ;;
-            "720p") echo "format=bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
-            "480p") echo "format=bestvideo[height<=480]+bestaudio/best[height<=480]" ;;
-            "360p") echo "format=bestvideo[height<=360]+bestaudio/best[height<=360]" ;;
-            "bestaudio (فقط دانلود صدا)") echo "format=bestaudio/best" ;;
+            "best (بدون محدودیت کیفیت)") echo "selected_format=bestvideo+bestaudio/best" ;;
+            "2160p (4K)") echo "selected_format=bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best" ;;
+            "1440p (2K)") echo "selected_format=bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best" ;;
+            "1080p") echo "selected_format=bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best" ;;
+            "720p") echo "selected_format=bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best" ;;
+            "480p") echo "selected_format=bestvideo[height<=480]+bestaudio/bestvideo+bestaudio/best" ;;
+            "360p") echo "selected_format=bestvideo[height<=360]+bestaudio/bestvideo+bestaudio/best" ;;
+            "bestaudio (فقط صدا)") echo "selected_format=bestaudio/best" ;;
           esac >> $GITHUB_OUTPUT
+        shell: bash
 
-      - name: دانلود ویدیوها با سازماندهی در پوشه‌ها
+      - name: دانلود ویدیوها با سازماندهی خودکار در پوشه‌ها
         run: |
           yt-dlp \
             --verbose \
             --output "channel_videos/%(uploader)s/%(playlist_title)s/%(playlist_index)s - %(title)s.%(ext)s" \
-            --format "${{ steps.quality.outputs.format }}" \
+            --format "${{ steps.quality.outputs.selected_format }}" \
             --merge-output-format mp4 \
             --yes-playlist \
             --ignore-errors \
@@ -75,24 +70,30 @@ jobs:
             --external-downloader-args "-x 16 -s 16 -k 2M" \
             "${{ github.event.inputs.channel_url }}"
 
-      - name: فشرده‌سازی و تقسیم فایل به چند بخش
+      - name: فشرده‌سازی و تقسیم خودکار فایل به حجم 2 گیگابایت
         run: |
-          # ایجاد آرشیو ZIP از ویدیوها
-          zip -r youtube-channel-videos.zip channel_videos/
-          
-          # حذف آرشیو قبلی اگر وجود دارد
-          rm -f youtube-channel-videos.z* || true
-          
-          # تقسیم فایل ZIP به بخش‌های کوچک
-          split -b ${{ github.event.inputs.split_size }} youtube-channel-videos.zip "youtube-channel-videos.zip.part"
-          
-          # نمایش لیست فایل‌های ایجاد شده
+          MAX_SIZE_MB=2048
+          echo "حداکثر حجم مجاز هر فایل: ${MAX_SIZE_MB} MB"
+          cd channel_videos
+          zip -r "../youtube-channel-videos.zip" .
+          cd ..
+          FILE_SIZE=$(stat -c%s "youtube-channel-videos.zip")
+          MAX_SIZE_BYTES=$((MAX_SIZE_MB * 1024 * 1024))
+          echo "حجم فایل اصلی: $((FILE_SIZE / 1024 / 1024)) MB"
+          if [ $FILE_SIZE -gt $MAX_SIZE_BYTES ]; then
+            echo "فایل اصلی از حد مجاز بزرگ‌تر است. در حال تقسیم..."
+            split -b ${MAX_SIZE_MB}M "youtube-channel-videos.zip" "youtube-channel-videos.zip.part"
+            rm -f "youtube-channel-videos.zip"
+          else
+            echo "فایل اصلی در حد مجاز است. بدون تغییر نگه داشته می‌شود."
+            mv "youtube-channel-videos.zip" "youtube-channel-videos.zip.parta"
+          fi
           ls -la youtube-channel-videos.zip.part*
 
-      - name: آپلود بخش‌های فایل در GitHub Actions Artifacts
+      - name: آپلود فایل نهایی در GitHub Actions
         uses: actions/upload-artifact@v4
         with:
-          name: youtube-channel-videos-parts
+          name: youtube-channel-videos
           path: youtube-channel-videos.zip.part*
           compression-level: 0
           retention-days: 7

@@ -4,12 +4,33 @@ on:
   workflow_dispatch:
     inputs:
       channel_url:
-        description: 'آدرس کامل کانال یوتیوب (مثلاً https://www.youtube.com/@channelname)'
+        description: 'آدرس کامل کانال یوتیوب'
         required: true
         type: string
+        default: 'https://www.youtube.com/@fereidounsabetghadam8482'
+        # 👆 این آدرس پیش‌فرض است، می‌توانید آن را عوض کنید یا خالی بگذارید.
+      video_quality:
+        description: 'کیفیت ویدیو را انتخاب کنید'
+        required: true
+        type: choice
+        default: 'best'
+        options:
+          - 'best (بهترین کیفیت ممکن)'
+          - '2160p (4K)'
+          - '1440p (2K)'
+          - '1080p'
+          - '720p'
+          - '480p'
+          - '360p'
+          - 'bestaudio (فقط دانلود صدا)'
+      split_size:
+        description: 'حداکثر حجم هر فایل فشرده (مثال: 1900M)'
+        required: false
+        type: string
+        default: '1900M'
 
 jobs:
-  download:
+  download-and-split:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -22,19 +43,27 @@ jobs:
         uses: AnimMouse/setup-yt-dlp@v3
         with:
           ffmpeg: true
-          aria2: true
-          ejs-node: true
 
-      - name: Create Download Directory
-        run: mkdir -p channel_videos
+      - name: انتخاب فرمت کیفیت
+        id: quality
+        run: |
+          case "${{ github.event.inputs.video_quality }}" in
+            "best (بهترین کیفیت ممکن)") echo "format=bestvideo+bestaudio/best" ;;
+            "2160p (4K)") echo "format=bestvideo[height<=2160]+bestaudio/best[height<=2160]" ;;
+            "1440p (2K)") echo "format=bestvideo[height<=1440]+bestaudio/best[height<=1440]" ;;
+            "1080p") echo "format=bestvideo[height<=1080]+bestaudio/best[height<=1080]" ;;
+            "720p") echo "format=bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
+            "480p") echo "format=bestvideo[height<=480]+bestaudio/best[height<=480]" ;;
+            "360p") echo "format=bestvideo[height<=360]+bestaudio/best[height<=360]" ;;
+            "bestaudio (فقط دانلود صدا)") echo "format=bestaudio/best" ;;
+          esac >> $GITHUB_OUTPUT
 
-      - name: Download Channel Videos
-        # [IMPORTANT] دستور yt-dlp بازنویسی شده بدون علامت نقل قول اضافی
+      - name: دانلود ویدیوها با سازماندهی در پوشه‌ها
         run: |
           yt-dlp \
             --verbose \
-            --output "channel_videos/%(title)s.%(ext)s" \
-            --format "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+            --output "channel_videos/%(uploader)s/%(playlist_title)s/%(playlist_index)s - %(title)s.%(ext)s" \
+            --format "${{ steps.quality.outputs.format }}" \
             --merge-output-format mp4 \
             --yes-playlist \
             --ignore-errors \
@@ -44,15 +73,26 @@ jobs:
             --download-archive downloaded.txt \
             --external-downloader aria2c \
             --external-downloader-args "-x 16 -s 16 -k 2M" \
-            ${{ github.event.inputs.channel_url }}
+            "${{ github.event.inputs.channel_url }}"
 
-      - name: List Downloaded Files
-        run: ls -la channel_videos/
+      - name: فشرده‌سازی و تقسیم فایل به چند بخش
+        run: |
+          # ایجاد آرشیو ZIP از ویدیوها
+          zip -r youtube-channel-videos.zip channel_videos/
+          
+          # حذف آرشیو قبلی اگر وجود دارد
+          rm -f youtube-channel-videos.z* || true
+          
+          # تقسیم فایل ZIP به بخش‌های کوچک
+          split -b ${{ github.event.inputs.split_size }} youtube-channel-videos.zip "youtube-channel-videos.zip.part"
+          
+          # نمایش لیست فایل‌های ایجاد شده
+          ls -la youtube-channel-videos.zip.part*
 
-      - name: Upload Artifact
+      - name: آپلود بخش‌های فایل در GitHub Actions Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: youtube-channel-videos
-          path: channel_videos/
-          compression-level: 9
+          name: youtube-channel-videos-parts
+          path: youtube-channel-videos.zip.part*
+          compression-level: 0
           retention-days: 7

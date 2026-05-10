@@ -33,8 +33,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # فقط بسته‌های واقعاً ضروری، بدون p7zip-full یا split (split هسته‌ای است)
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
@@ -159,7 +160,7 @@ jobs:
           PYEOF
         shell: bash
 
-      - name: Split large MP4s into GitHub-friendly chunks
+      - name: Split large MP4s into GitHub-friendly chunks (≤ 95MB)
         run: |
           echo ">> بررسی و تقسیم فایل‌های بزرگ‌تر از 95 مگابایت..."
           find downloads -type f -name "*.mp4" -size +95M | while read file; do
@@ -176,12 +177,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add downloads/
-          if git diff --cached --quiet; then
+
+          # ★ کلید حل مشکل: فقط در صورت وجود تغییرات commit کن
+          if [[ -n $(git status --porcelain) ]]; then
+            git commit -m "Add downloaded videos from ${{ github.event.inputs.channel_url }}"
+            git pull --rebase origin ${{ github.ref_name }}
+            git push origin HEAD:${{ github.ref_name }}
+          else
             echo "هیچ فایل جدیدی برای commit وجود ندارد."
-            exit 0
           fi
-          git commit -m "Add/downloaded videos from ${{ github.event.inputs.channel_url }}"
-          git push origin HEAD:${{ github.ref_name }}
         shell: bash
 
       - name: Show final tree structure

@@ -1,23 +1,14 @@
-name: YouTube Smart Downloader
+name: YouTube Channel Downloader (Commit Version)
 
-# ورودی‌های جدید و مهندسی‌شده
 on:
   workflow_dispatch:
     inputs:
-      download_mode:
-        description: 'چه چیزی را می‌خواهید دانلود کنید؟'
-        required: true
-        type: choice
-        default: 'کانال کامل'
-        options:
-          - 'کانال کامل'
-          - 'پلی لیست خاص'
-      target_url:
-        description: 'آدرس کانال یا پلی‌لیست یوتیوب'
+      channel_url:
+        description: 'آدرس کامل کانال یوتیوب (مثال: https://www.youtube.com/@ChannelName)'
         required: true
         type: string
       video_quality:
-        description: 'حداکثر کیفیت دلخواه'
+        description: 'حداکثر کیفیت مورد نظر را انتخاب کنید'
         required: true
         type: choice
         default: '1080p'
@@ -28,118 +19,178 @@ on:
           - '720p'
           - '480p'
           - '360p'
-          - 'best (بهترین کیفیت)'
+          - 'best (بدون محدودیت کیفیت)'
 
-# رفع هشدار Node.js 20
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  smart-download:
+  download-and-commit:
     runs-on: ubuntu-latest
-    # مجوز نوشتن روی مخزن برای commit کردن فایل‌ها
     permissions:
-      contents: write
+      contents: write  # ضروری برای push کردن کامیت‌ها
 
     steps:
-      # 1. دریافت سورس مخزن
-      - name: دریافت کدهای مخزن
+      # مرحله ۱: دریافت کدهای ریپازیتوری
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # این گزینه برای commit کردن در ادامه‌ی کار ضروری است
-          persist-credentials: true
+          ref: ${{ github.head_ref }} # مهم: branch فعلی را نگه می‌دارد
 
-      # 2. نصب ابزارهای کلیدی با روش اصولی
-      - name: نصب Deno و yt-dlp به همراه وابستگی‌های ضروری
+      # مرحله ۲: نصب ابزارهای سیستمی
+      - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg aria2 curl
-          # نصب Deno برای حل چالش‌های جاوااسکریپت یوتیوب
-          curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
-          # نصب yt-dlp با تمام افزونه‌ها (مهم: yt-dlp-ejs)
-          pip install --break-system-packages "yt-dlp[default]" yt-dlp-ejs
+          sudo apt-get install -y ffmpeg aria2 p7zip-full
 
-      # 3. تبدیل انتخاب کاربر به فرمت فنی yt-dlp
-      - name: ساخت فرمت yt-dlp و پرچم‌های لازم
-        id: config
+      # ★ مرحله کلیدی ۳: نصب Deno (موتور جاوااسکریپت ضروری برای یوتیوب)
+      - name: Install deno (JavaScript runtime for yt-dlp)
         run: |
-          # تبدیل کیفیت
+          curl -fsSL https://deno.land/install.sh | sh -s -- -y
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+
+      # ★ مرحله کلیدی ۴: نصب آخرین نسخه شبانه yt-dlp + بسته EJS
+      - name: Install latest yt-dlp with EJS support
+        run: |
+          # نصب yt-dlp از GitHub Releases
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+          # نصب بسته yt-dlp-ejs برای حل چالش‌های جاوااسکریپت یوتیوب
+          pip install --upgrade yt-dlp-ejs
+
+      # مرحله ۵: نمایش اطلاعات ورودی برای عیب‌یابی
+      - name: Debug inputs
+        run: |
+          echo "Channel URL      : ${{ github.event.inputs.channel_url }}"
+          echo "Selected Quality : ${{ github.event.inputs.video_quality }}"
+
+      # مرحله ۶: تبدیل کیفیت انتخابی به فرمت قابل فهم برای yt-dlp
+      - name: Map quality to yt-dlp format string
+        id: quality
+        run: |
           case "${{ github.event.inputs.video_quality }}" in
-            "best (بهترین کیفیت)") FORMAT="bestvideo+bestaudio/best" ;;
-            "2160p (4K)")  FORMAT="bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best" ;;
-            "1440p (2K)")  FORMAT="bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best" ;;
-            "1080p")       FORMAT="bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best" ;;
-            "720p")        FORMAT="bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best" ;;
-            "480p")        FORMAT="bestvideo[height<=480]+bestaudio/bestvideo+bestaudio/best" ;;
-            "360p")        FORMAT="bestvideo[height<=360]+bestaudio/bestvideo+bestaudio/best" ;;
-            *)             FORMAT="bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best" ;;
+            "best (بدون محدودیت کیفیت)")   FORMAT="bestvideo+bestaudio/best" ;;
+            "2160p (4K)")                    FORMAT="bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best" ;;
+            "1440p (2K)")                    FORMAT="bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best" ;;
+            "1080p")                         FORMAT="bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best" ;;
+            "720p")                          FORMAT="bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best" ;;
+            "480p")                          FORMAT="bestvideo[height<=480]+bestaudio/bestvideo+bestaudio/best" ;;
+            "360p")                          FORMAT="bestvideo[height<=360]+bestaudio/bestvideo+bestaudio/best" ;;
+            *)                               FORMAT="bestvideo+bestaudio/best" ;;
           esac
+          echo "Using yt-dlp format: $FORMAT"
           echo "selected_format=$FORMAT" >> $GITHUB_OUTPUT
+        shell: bash
 
-          # تنظیم پرچم‌های دانلود بر اساس انتخاب کاربر
-          if [ "${{ github.event.inputs.download_mode }}" == "کانال کامل" ]; then
-            echo "extra_flags=--yes-playlist --playlist-reverse" >> $GITHUB_OUTPUT
-            echo "output_template=channel_videos/%(uploader)s/%(playlist_title|No_Playlist)s/%(playlist_index& |)s%(title)s.%(ext)s" >> $GITHUB_OUTPUT
-          else
-            echo "extra_flags=--yes-playlist --playlist-random" >> $GITHUB_OUTPUT
-            echo "output_template=channel_videos/%(playlist_title)s/%(playlist_index)s - %(title)s.%(ext)s" >> $GITHUB_OUTPUT
-          fi
+      # ★ مرحله ۷: تست اولیه برای اطمینان از دسترسی به کانال
+      - name: Test channel extractor (list first 5 videos)
+        run: |
+          echo ">>> در حال تست استخراج اطلاعات از کانال. اگر خطایی رخ دهد، در اینجا نمایش داده می‌شود."
+          yt-dlp \
+            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            --extractor-args "youtube:player_client=web" \
+            --flat-playlist \
+            --dump-json \
+            --playlist-end 5 \
+            "${{ github.event.inputs.channel_url }}" || {
+              echo "❌ FAILED: استخراج اطلاعات کانال شکست خورد. لطفاً لاگ بالا را بررسی کنید."
+              exit 1
+            }
+          echo "✅ تست استخراج با موفقیت انجام شد."
 
-      # 4. دانلود هوشمند با مدیریت خطا
-      - name: دانلود ویدیوها و سازماندهی در پوشه‌ها
+      # ★ مرحله ۸: دانلود تمام ویدیوهای کانال
+      - name: Download all videos from channel
         id: download
         run: |
           mkdir -p channel_videos
-          echo ">> شروع دانلود از: ${{ github.event.inputs.target_url }}"
-          
-          # اجرای yt-dlp با تنظیمات بهینه و عبور از تحریم‌ها
+          echo ">>> دانلود تمام ویدیوها با ساختار پوشه‌بندی خودکار..."
+          # اجرای دانلود و ذخیره لاگ
           yt-dlp \
             --verbose \
             --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
             --extractor-args "youtube:player_client=web" \
-            --output "${{ steps.config.outputs.output_template }}" \
-            --format "${{ steps.config.outputs.selected_format }}" \
+            --output "channel_videos/%(uploader)s/%(playlist_title|No_Playlist)s/%(playlist_index& |)s%(title)s.%(ext)s" \
+            --format "${{ steps.quality.outputs.selected_format }}" \
             --merge-output-format mp4 \
-            ${{ steps.config.outputs.extra_flags }} \
+            --yes-playlist \
             --ignore-errors \
             --no-overwrites \
             --continue \
+            --extract-archive downloaded.txt \
             --download-archive downloaded.txt \
             --external-downloader aria2c \
             --external-downloader-args "-x 16 -s 16 -k 2M" \
-            "${{ github.event.inputs.target_url }}" 2>&1 | tee yt-dlp.log
+            "${{ github.event.inputs.channel_url }}" 2>&1 | tee yt-dlp.log
 
-          # بررسی منطقی بودن خروجی
+          # بررسی محتوای پوشه دانلود
           if [ ! "$(ls -A channel_videos 2>/dev/null)" ]; then
-            echo "خطا: هیچ ویدیویی دانلود نشد. لاگ نهایی:"
+            echo "❌ ERROR: هیچ ویدیویی دانلود نشد."
+            echo "--- 30 خط آخر لاگ yt-dlp برای عیب‌یابی ---"
             tail -n 30 yt-dlp.log
             exit 1
           fi
-          echo ">> دانلود موفقیت‌آمیز بود."
+          echo "✅ دانلود ویدیوها کامل شد."
+        shell: bash
 
-      # 5. مرحله طلایی: ذخیره فایل‌ها در خود مخزن گیت (Commit & Push)
-      - name: ذخیره مستقیم ویدیوها در مخزن گیت‌هاب
-        if: success()
+      # ★★★ مرحله جدید ۹: تقسیم فایل‌های حجیم به بخش‌های کوچکتر از ۱۰۰MB ★★★
+      - name: Split large files into GitHub-friendly chunks (< 95MB)
         run: |
-          # حذف تمام فایل‌های موقتی و نگه داشتن فقط ویدیوها
-          rm -f yt-dlp.log downloaded.txt
+          echo ">>> در حال قطعه‌قطعه کردن فایل‌های بزرگتر از ۹۵MB..."
           
-          # بررسی اندازه فایل‌ها و هشدار در صورت عبور از محدودیت گیت‌هاب
-          echo "--- بررسی اندازه فایل‌ها ---"
-          find channel_videos -type f -size +50M -exec echo "هشدار: {} بزرگتر از 50MB است" \;
-          
-          # تنظیمات Git برای کاربر اکانت
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          python3 << 'PYEOF'
+          import os, glob
 
-          # اضافه کردن و commit کردن تمام تغییرات
-          git add channel_videos/ downloaded.txt
-          
-          # اگر تغییری ایجاد نشده بود، کار را متوقف نکن
-          if git diff --cached --quiet; then
-            echo "هیچ فایل جدیدی برای commit وجود ندارد."
-            exit 0
-          fi
-          
-          git commit -m "دانلود خودکار ویدیوهای جدید از ${{ github.event.inputs.target_url }}"
-          git push
+          # پوشه‌ای که ویدیوها در آن قرار دارند
+          DOWNLOAD_DIR = "channel_videos"
+          # حداکثر سایز هر قطعه: ۹۵ مگابایت (برای احتیاط و فضای خالی)
+          CHUNK_SIZE = 95 * 1024 * 1024  
+
+          def split_file(filepath, chunk_size):
+              """فایل را به قطعات chunk_size بایتی تقسیم می‌کند."""
+              if not os.path.exists(filepath):
+                  return
+              fsize = os.path.getsize(filepath)
+              if fsize <= chunk_size:
+                  return  # نیازی به تقسیم نیست
+              
+              print(f"  ✂️ در حال تقسیم: {filepath} ({fsize/(1024*1024):.1f} MB)")
+              base_name = os.path.basename(filepath)
+              dir_name = os.path.dirname(filepath)
+              
+              with open(filepath, 'rb') as f:
+                  chunk_num = 0
+                  while True:
+                      chunk = f.read(chunk_size)
+                      if not chunk:
+                          break
+                      chunk_num += 1
+                      chunk_name = f"{base_name}.part{chunk_num:04d}"
+                      chunk_path = os.path.join(dir_name, chunk_name)
+                      with open(chunk_path, 'wb') as cf:
+                          cf.write(chunk)
+                      print(f"     → {chunk_name} ({len(chunk)/(1024*1024):.1f} MB)")
+              
+              # حذف فایل اصلی بزرگ بعد از تقسیم موفق
+              os.remove(filepath)
+              print(f"     🗑️ فایل اصلی حذف شد: {base_name}")
+
+          # پیدا کردن همه فایل‌های mp4 در پوشه دانلود
+          all_files = glob.glob(os.path.join(DOWNLOAD_DIR, '**', '*.mp4'), recursive=True)
+          for f in all_files:
+              split_file(f, CHUNK_SIZE)
+
+          print("✅ تقسیم فایل‌ها به پایان رسید.")
+          PYEOF
+
+      # ★★★ مرحله ۱۰: ساخت یک فایل README ساده در پوشه دانلود ★★★
+      - name: Create README in download folder
+        run: |
+          cat > channel_videos/README.md << 'EOF'
+          # 📁 ویدیوهای دانلود شده
+
+          این پوشه حاوی ویدیوهای دانلود شده از کانال یوتیوب است.  
+          فایل‌های با پسوند `.partXXXX` قطعات تشکیل‌دهنده یک ویدیو هستند.
+
+          ## 🔧 نحوه بازیابی (Merge) ویدیوها در ویندوز
+          ۱. همه قطعات یک ویدیو را در یک پوشه قرار دهید.
+          ۲. یک فایل متنی با نام `merge.bat` در همان پوشه بسازید و کد زیر را داخل آن قرار دهید:

@@ -28,30 +28,25 @@ jobs:
   download-and-commit:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # اجازه commit و push روی ریپازیتوری
+      contents: write
 
     steps:
-      # 1. دریافت سورس ریپو (حتماً v4 بماند)
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # 2. نصب ابزارهای ضروری
+      # فقط بسته‌های واقعاً ضروری، بدون p7zip-full یا split (split هسته‌ای است)
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg aria2 p7zip-full curl jq python3-pip split
+          sudo apt-get install -y ffmpeg aria2 python3-pip curl jq
 
-      # 3. نصب Deno + yt-dlp با افزونه‌های ضد چالش
-      - name: Install Deno and latest yt-dlp with EJS
+      - name: Install Deno and latest yt-dlp with EJS support
         run: |
           curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
           pip3 install --break-system-packages "yt-dlp[default]" yt-dlp-ejs
-          echo "Deno version: $(deno --version)"
-          echo "yt-dlp version: $(yt-dlp --version)"
+          echo "Deno: $(deno --version)"
+          echo "yt-dlp: $(yt-dlp --version)"
 
-      # 4. استخراج لیست و دانلود (از API) مانند قبل، اما در پوشه downloads
       - name: Download all channel videos via API
         run: |
           python3 << 'PYEOF'
@@ -70,11 +65,9 @@ jobs:
           }
           TARGET_QUALITY = QUALITY_MAP.get("${{ github.event.inputs.video_quality }}", "720p")
 
-          # پایه جدید: پوشه downloads در ریشه ریپو
           BASE_DIR = "downloads"
           os.makedirs(BASE_DIR, exist_ok=True)
 
-          # گرفتن لیست ویدیوها
           print(">> دریافت لیست ویدیوهای کانال...")
           cmd = ["yt-dlp", "--flat-playlist", "--dump-json", CHANNEL_URL]
           try:
@@ -127,7 +120,6 @@ jobs:
               }
 
               try:
-                  # ارسال درخواست تبدیل
                   resp = requests.post(API_ENDPOINT, json=payload, headers=HEADERS, timeout=30)
                   resp.raise_for_status()
                   data = resp.json()
@@ -136,9 +128,8 @@ jobs:
                       print("  ⚠️ پاسخ API ناقص، رد شد.")
                       continue
 
-                  # انتظار برای تکمیل تبدیل (حداکثر 120 ثانیه)
                   download_url = None
-                  for _ in range(60):   # 60 * 2 ثانیه
+                  for _ in range(60):
                       time.sleep(2)
                       sres = requests.get(status_url, headers=HEADERS, timeout=15)
                       sdata = sres.json()
@@ -148,12 +139,11 @@ jobs:
                       elif sdata.get('status') == 'failed':
                           print("  ❌ تبدیل ناموفق.")
                           break
-                  
+
                   if not download_url:
                       print("  ⏱️ مهلت انتظار تمام شد.")
                       continue
 
-                  # دانلود خود فایل
                   print("  ⬇️ در حال دانلود...")
                   dl_resp = requests.get(download_url, headers=HEADERS, stream=True, timeout=300)
                   with open(filepath, 'wb') as f:
@@ -165,45 +155,35 @@ jobs:
                   print(f"  🔥 خطا: {e}")
                   continue
 
-          print("پایان دانلود.")
+          print("پایان دانلود تمام ویدیوها.")
           PYEOF
         shell: bash
 
-      # 5. تقسیم فایل‌های حجیم به تکه‌های زیر 100 مگ (و آماده‌سازی برای commit)
       - name: Split large MP4s into GitHub-friendly chunks
         run: |
           echo ">> بررسی و تقسیم فایل‌های بزرگ‌تر از 95 مگابایت..."
           find downloads -type f -name "*.mp4" -size +95M | while read file; do
             echo "تقسیم: $file"
-            # تقسیم به بخش‌های 95 مگابایتی با پسوند عددی
             split -b 95M -d "$file" "${file}.part"
-            # حذف فایل اصلی بزرگ
             rm "$file"
             echo "فایل اصلی حذف و بخش‌ها ایجاد شدند."
           done
-          echo "لیست فایل‌های موجود در downloads:"
+          echo "لیست فایل‌ها در downloads:"
           find downloads -type f | sort
 
-      # 6. ثبت تغییرات و push به ریپو
       - name: Commit and push videos to repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # اضافه کردن تمام محتویات پوشه downloads (حتی فایل‌های جدید)
           git add downloads/
-          
-          # اگر تغییری وجود نداشت، ادامه ندهیم
           if git diff --cached --quiet; then
             echo "هیچ فایل جدیدی برای commit وجود ندارد."
             exit 0
           fi
-          
-          git commit -m "Add downloaded videos from channel ${{ github.event.inputs.channel_url }}"
+          git commit -m "Add/downloaded videos from ${{ github.event.inputs.channel_url }}"
           git push origin HEAD:${{ github.ref_name }}
         shell: bash
 
-      # 7. (اختیاری) نمایش ساختار نهایی پوشه
       - name: Show final tree structure
         run: |
           echo "========== ساختار پوشه downloads =========="

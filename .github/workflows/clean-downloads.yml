@@ -1,0 +1,48 @@
+name: Clean Downloads Folder
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'برای تأیید حذف عبارت DELETE را وارد کنید'
+        required: true
+        type: string
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "DELETE" ]; then
+            echo "عبارت تأیید اشتباه است. عملیات لغو شد."
+            exit 1
+          fi
+
+      - name: Remove downloads folder
+        run: |
+          if [ -d "downloads" ]; then
+            git rm -rf downloads
+            echo "پوشه دانلودها از ردیابی گیت خارج شد."
+          else
+            echo "پوشه‌ای به نام downloads یافت نشد."
+          fi
+
+      - name: Commit and push removal
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --cached --quiet; then
+            echo "چیزی برای commit وجود ندارد."
+          else
+            git commit -m "Remove downloads folder"
+            git push origin HEAD:${{ github.ref_name }}
+          fi

@@ -1,237 +1,145 @@
-name: YouTube Channel Downloader (Enhanced)
+name: YouTube Smart Downloader
 
+# ورودی‌های جدید و مهندسی‌شده
 on:
   workflow_dispatch:
     inputs:
-      channel_url:
-        description: 'آدرس کامل کانال یوتیوب (مثال: https://www.youtube.com/@ChannelName)'
-        required: true
-        type: string
-      mode:
-        description: 'نوع انتخاب'
+      download_mode:
+        description: 'چه چیزی را می‌خواهید دانلود کنید؟'
         required: true
         type: choice
-        default: 'list_only'
+        default: 'کانال کامل'
         options:
-          - 'list_only (فقط لیست پلی‌لیست‌ها و ویدیوها)'
-          - 'all (دانلود همه)'
-          - 'specific_playlist (پلی‌لیست خاص)'
-          - 'specific_videos (ویدیوهای خاص)'
-      selection:
-        description: 'شناسه‌های انتخاب‌شده (در صورت نیاز، با کاما جدا کنید)'
-        required: false
+          - 'کانال کامل'
+          - 'پلی لیست خاص'
+      target_url:
+        description: 'آدرس کانال یا پلی‌لیست یوتیوب'
+        required: true
         type: string
       video_quality:
-        description: 'حداکثر کیفیت مورد نظر'
+        description: 'حداکثر کیفیت دلخواه'
         required: true
         type: choice
         default: '1080p'
         options:
-          - 'best (بهترین کیفیت ممکن)'
           - '2160p (4K)'
           - '1440p (2K)'
           - '1080p'
           - '720p'
           - '480p'
           - '360p'
-          - 'bestaudio (فقط صدا)'
+          - 'best (بهترین کیفیت)'
 
+# رفع هشدار Node.js 20
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # استفاده از آخرین Runtime جاوااسکریپت
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  list-playlists:
-    if: github.event.inputs.mode == 'list_only'
+  smart-download:
     runs-on: ubuntu-latest
+    # مجوز نوشتن روی مخزن برای commit کردن فایل‌ها
     permissions:
       contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
+      # 1. دریافت سورس مخزن
+      - name: دریافت کدهای مخزن
+        uses: actions/checkout@v4
+        with:
+          # این گزینه برای commit کردن در ادامه‌ی کار ضروری است
+          persist-credentials: true
 
-      - name: Install system dependencies
+      # 2. نصب ابزارهای کلیدی با روش اصولی
+      - name: نصب Deno و yt-dlp به همراه وابستگی‌های ضروری
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg jq aria2
-
-      - name: Install deno and latest yt-dlp
-        run: |
+          sudo apt-get install -y ffmpeg aria2 curl
+          # نصب Deno برای حل چالش‌های جاوااسکریپت یوتیوب
           curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
-          pip install --upgrade --break-system-packages "yt-dlp[default]"
+          # نصب yt-dlp با تمام افزونه‌ها (مهم: yt-dlp-ejs)
+          pip install --break-system-packages "yt-dlp[default]" yt-dlp-ejs
 
-      - name: Extract playlists and standalone videos
-        id: extract
+      # 3. تبدیل انتخاب کاربر به فرمت فنی yt-dlp
+      - name: ساخت فرمت yt-dlp و پرچم‌های لازم
+        id: config
         run: |
-          echo "در حال استخراج لیست کامل پلی‌لیست‌ها و ویدیوهای مستقل..."
-          # استخراج همه ویدیوها با فرمت flat و ذخیره در یک فایل JSON موقت
-          yt-dlp --flat-playlist --dump-json "${{ github.event.inputs.channel_url }}" > temp.json
-
-          # پردازش فایل JSON و ساخت فایل انتخاب نهایی
-          python3 << 'PYEOF'
-          import json, os, re
-          from collections import OrderedDict
-
-          playlists = OrderedDict()
-          standalone_videos = []
-
-          try:
-              with open("temp.json", "r", encoding="utf-8") as f:
-                  for line in f:
-                      video = json.loads(line)
-                      video_id = video.get("id", "")
-                      title = video.get("title", "unknown").replace("|", "-")
-                      playlist = video.get("playlist_title", None)
-                      playlist_id = video.get("playlist_id", None)
-                      url = video.get("url", "https://www.youtube.com/watch?v=" + video_id)
-
-                      if playlist and playlist_id:
-                          if playlist_id not in playlists:
-                              playlists[playlist_id] = {
-                                  "title": playlist,
-                                  "videos": []
-                              }
-                          playlists[playlist_id]["videos"].append({"id": video_id, "title": title, "url": url})
-                      else:
-                          standalone_videos.append({"id": video_id, "title": title, "url": url})
-          except Exception as e:
-              print(f"خطا در پردازش: {e}")
-              exit(1)
-
-          # ساخت فایل selection.md برای نمایش در مخزن
-          output = ["# 🎬 لیست محتوای کانال", ""]
-          if playlists:
-              output.append("## 📁 پلی‌لیست‌ها")
-              for pid, pdata in playlists.items():
-                  output.append(f"* **{pdata['title']}** (ID: `{pid}`)")
-                  for i, v in enumerate(pdata["videos"], 1):
-                      output.append(f"    {i}. {v['title']}")
-          if standalone_videos:
-              output.append("## 🎵 ویدیوهای مستقل")
-              for i, v in enumerate(standalone_videos, 1):
-                  output.append(f"    {i}. {v['title']}")
-          with open("selection.md", "w", encoding="utf-8") as f:
-              f.write("\n".join(output))
-
-          # ذخیره اطلاعات JSON برای استفاده در مراحل بعدی
-          selection_data = {
-              "playlists": {pid: {"title": p["title"], "video_count": len(p["videos"])} for pid, p in playlists.items()},
-              "standalone_count": len(standalone_videos)
-          }
-          with open("selection_data.json", "w", encoding="utf-8") as f:
-              json.dump(selection_data, f, indent=2)
-
-          print(f"✅ لیست استخراج شد: {len(playlists)} پلی‌لیست و {len(standalone_videos)} ویدیوی مستقل.")
-          PYEOF
-
-      - name: Commit selection list to repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add selection.md selection_data.json
-          git commit -m "📋 بروزرسانی لیست پلی‌لیست‌ها و ویدیوها"
-          git push
-
-  download-and-commit:
-    if: github.event.inputs.mode != 'list_only'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg aria2 p7zip-full
-
-      - name: Install deno and latest yt-dlp
-        run: |
-          curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
-          pip install --upgrade --break-system-packages "yt-dlp[default]"
-
-      - name: Map quality to yt-dlp format
-        id: quality
-        run: |
+          # تبدیل کیفیت
           case "${{ github.event.inputs.video_quality }}" in
-            "best (بهترین کیفیت ممکن)") FORMAT="bestvideo+bestaudio/best" ;;
-            "2160p (4K)")              FORMAT="bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best" ;;
-            "1440p (2K)")              FORMAT="bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best" ;;
-            "1080p")                   FORMAT="bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best" ;;
-            "720p")                    FORMAT="bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best" ;;
-            "480p")                    FORMAT="bestvideo[height<=480]+bestaudio/bestvideo+bestaudio/best" ;;
-            "360p")                    FORMAT="bestvideo[height<=360]+bestaudio/bestvideo+bestaudio/best" ;;
-            "bestaudio (فقط صدا)")     FORMAT="bestaudio/best" ;;
-            *)                         FORMAT="bestvideo+bestaudio/best" ;;
+            "best (بهترین کیفیت)") FORMAT="bestvideo+bestaudio/best" ;;
+            "2160p (4K)")  FORMAT="bestvideo[height<=2160]+bestaudio/bestvideo+bestaudio/best" ;;
+            "1440p (2K)")  FORMAT="bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best" ;;
+            "1080p")       FORMAT="bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best" ;;
+            "720p")        FORMAT="bestvideo[height<=720]+bestaudio/bestvideo+bestaudio/best" ;;
+            "480p")        FORMAT="bestvideo[height<=480]+bestaudio/bestvideo+bestaudio/best" ;;
+            "360p")        FORMAT="bestvideo[height<=360]+bestaudio/bestvideo+bestaudio/best" ;;
+            *)             FORMAT="bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best" ;;
           esac
           echo "selected_format=$FORMAT" >> $GITHUB_OUTPUT
-        shell: bash
 
-      - name: Determine download scope
-        id: scope
-        run: |
-          MODE="${{ github.event.inputs.mode }}"
-          SELECTION="${{ github.event.inputs.selection }}"
-
-          if [ "$MODE" == "all" ]; then
-            echo "url=${{ github.event.inputs.channel_url }}" >> $GITHUB_OUTPUT
-            echo "item_filter=" >> $GITHUB_OUTPUT
-          elif [ "$MODE" == "specific_playlist" ]; then
-            BASE_URL="${{ github.event.inputs.channel_url }}"
-            echo "url=https://www.youtube.com/playlist?list=${SELECTION}" >> $GITHUB_OUTPUT
-            echo "item_filter=" >> $GITHUB_OUTPUT
-          elif [ "$MODE" == "specific_videos" ]; then
-            echo "url=${{ github.event.inputs.channel_url }}" >> $GITHUB_OUTPUT
-            IFS=',' read -ra IDS <<< "$SELECTION"
-            ITEMS=""
-            for id in "${IDS[@]}"; do
-              ITEMS+=" --playlist-items $(echo $id | xargs)"
-            done
-            echo "item_filter=$ITEMS" >> $GITHUB_OUTPUT
+          # تنظیم پرچم‌های دانلود بر اساس انتخاب کاربر
+          if [ "${{ github.event.inputs.download_mode }}" == "کانال کامل" ]; then
+            echo "extra_flags=--yes-playlist --playlist-reverse" >> $GITHUB_OUTPUT
+            echo "output_template=channel_videos/%(uploader)s/%(playlist_title|No_Playlist)s/%(playlist_index& |)s%(title)s.%(ext)s" >> $GITHUB_OUTPUT
+          else
+            echo "extra_flags=--yes-playlist --playlist-random" >> $GITHUB_OUTPUT
+            echo "output_template=channel_videos/%(playlist_title)s/%(playlist_index)s - %(title)s.%(ext)s" >> $GITHUB_OUTPUT
           fi
-        shell: bash
 
-      - name: Download videos
+      # 4. دانلود هوشمند با مدیریت خطا
+      - name: دانلود ویدیوها و سازماندهی در پوشه‌ها
+        id: download
         run: |
           mkdir -p channel_videos
+          echo ">> شروع دانلود از: ${{ github.event.inputs.target_url }}"
+          
+          # اجرای yt-dlp با تنظیمات بهینه و عبور از تحریم‌ها
           yt-dlp \
             --verbose \
             --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
             --extractor-args "youtube:player_client=web" \
-            --output "channel_videos/%(playlist_title|No Playlist)s/%(title)s.%(ext)s" \
-            --format "${{ steps.quality.outputs.selected_format }}" \
+            --output "${{ steps.config.outputs.output_template }}" \
+            --format "${{ steps.config.outputs.selected_format }}" \
             --merge-output-format mp4 \
-            --yes-playlist \
+            ${{ steps.config.outputs.extra_flags }} \
             --ignore-errors \
             --no-overwrites \
             --continue \
-            --extract-archive downloaded.txt \
             --download-archive downloaded.txt \
-            ${{ steps.scope.outputs.item_filter }} \
-            "${{ steps.scope.outputs.url }}"
-        shell: bash
+            --external-downloader aria2c \
+            --external-downloader-args "-x 16 -s 16 -k 2M" \
+            "${{ github.event.inputs.target_url }}" 2>&1 | tee yt-dlp.log
 
-      - name: Commit videos to repository
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # تنظیم Git LFS برای فایل‌های بزرگ (اختیاری)
-          if command -v git-lfs &> /dev/null; then
-            git lfs track "*.mp4" "*.mkv" "*.webm"
-            git add .gitattributes
+          # بررسی منطقی بودن خروجی
+          if [ ! "$(ls -A channel_videos 2>/dev/null)" ]; then
+            echo "خطا: هیچ ویدیویی دانلود نشد. لاگ نهایی:"
+            tail -n 30 yt-dlp.log
+            exit 1
           fi
+          echo ">> دانلود موفقیت‌آمیز بود."
 
-          git add channel_videos/
-          if git diff --staged --quiet; then
-            echo "هیچ ویدیوی جدیدی برای commit وجود ندارد."
-          else
-            git commit -m "🎥 ذخیره ویدیوهای جدید در channel_videos/"
-            git push
-          fi
-
-      - name: Notify completion (optional)
+      # 5. مرحله طلایی: ذخیره فایل‌ها در خود مخزن گیت (Commit & Push)
+      - name: ذخیره مستقیم ویدیوها در مخزن گیت‌هاب
+        if: success()
         run: |
-          echo "🎉 فرآیند دانلود و ذخیره‌سازی در مخزن کامل شد."
+          # حذف تمام فایل‌های موقتی و نگه داشتن فقط ویدیوها
+          rm -f yt-dlp.log downloaded.txt
+          
+          # بررسی اندازه فایل‌ها و هشدار در صورت عبور از محدودیت گیت‌هاب
+          echo "--- بررسی اندازه فایل‌ها ---"
+          find channel_videos -type f -size +50M -exec echo "هشدار: {} بزرگتر از 50MB است" \;
+          
+          # تنظیمات Git برای کاربر اکانت
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # اضافه کردن و commit کردن تمام تغییرات
+          git add channel_videos/ downloaded.txt
+          
+          # اگر تغییری ایجاد نشده بود، کار را متوقف نکن
+          if git diff --cached --quiet; then
+            echo "هیچ فایل جدیدی برای commit وجود ندارد."
+            exit 0
+          fi
+          
+          git commit -m "دانلود خودکار ویدیوهای جدید از ${{ github.event.inputs.target_url }}"
+          git push

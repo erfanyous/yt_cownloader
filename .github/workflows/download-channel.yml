@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       channel_url:
-        description: 'آدرس دقیق کانال یوتیوب (مثل https://www.youtube.com/@Google)'
+        description: 'آدرس کامل کانال یوتیوب (مثال: https://www.youtube.com/@Google)'
         required: true
         type: string
       video_quality:
-        description: 'حداکثر کیفیت دلخواه'
+        description: 'حداکثر کیفیت ویدیو'
         required: true
         type: choice
         default: '1080p'
@@ -36,19 +36,19 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install system dependencies
+      - name: Install system packages
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg aria2 python3-pip curl jq
 
-      - name: Install Deno and latest yt-dlp with EJS support
+      - name: Setup Deno and yt-dlp with EJS support
         run: |
           curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
           pip3 install --break-system-packages "yt-dlp[default]" yt-dlp-ejs
-          echo "Deno: $(deno --version)"
-          echo "yt-dlp: $(yt-dlp --version)"
+          echo "Deno version: $(deno --version)"
+          echo "yt-dlp version: $(yt-dlp --version)"
 
-      - name: Download all channel videos via API
+      - name: Download all videos from channel
         run: |
           python3 << 'PYEOF'
           import os, sys, json, time, re, subprocess
@@ -76,7 +76,7 @@ jobs:
               videos = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
               print(f">> {len(videos)} ویدیو پیدا شد.")
           except Exception as e:
-              print(f"خطای دریافت لیست: {e}")
+              print(f"خطا در دریافت لیست ویدیوها: {e}")
               sys.exit(1)
 
           if not videos:
@@ -84,7 +84,7 @@ jobs:
               sys.exit(0)
 
           HEADERS = {
-              "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
               "Accept": "application/json",
               "Referer": "https://media.ytmp3.gg/",
               "Content-Type": "application/json",
@@ -110,7 +110,7 @@ jobs:
               filepath = os.path.join(target_dir, filename)
 
               if os.path.exists(filepath):
-                  print(f"[{idx+1}/{len(videos)}] ✓ قبلاً موجود: {title}")
+                  print(f"[{idx+1}/{len(videos)}] ✓ از قبل وجود داشت: {title}")
                   continue
 
               print(f"[{idx+1}/{len(videos)}] درخواست تبدیل: {title}")
@@ -126,11 +126,11 @@ jobs:
                   data = resp.json()
                   status_url = data.get('statusUrl')
                   if not status_url:
-                      print("  ⚠️ پاسخ API ناقص، رد شد.")
+                      print("  ⚠️ پاسخ API ناقص بود، رد شد.")
                       continue
 
                   download_url = None
-                  for _ in range(60):
+                  for _ in range(60):  # حداکثر 120 ثانیه انتظار
                       time.sleep(2)
                       sres = requests.get(status_url, headers=HEADERS, timeout=15)
                       sdata = sres.json()
@@ -138,11 +138,11 @@ jobs:
                           download_url = sdata.get('downloadUrl')
                           break
                       elif sdata.get('status') == 'failed':
-                          print("  ❌ تبدیل ناموفق.")
+                          print("  ❌ تبدیل شکست خورد.")
                           break
 
                   if not download_url:
-                      print("  ⏱️ مهلت انتظار تمام شد.")
+                      print("  ⏱️ زمان انتظار به پایان رسید.")
                       continue
 
                   print("  ⬇️ در حال دانلود...")
@@ -153,43 +153,57 @@ jobs:
                   print(f"  ✅ ذخیره شد: {filename}")
 
               except Exception as e:
-                  print(f"  🔥 خطا: {e}")
+                  print(f"  🔥 خطای غیرمنتظره: {e}")
                   continue
 
           print("پایان دانلود تمام ویدیوها.")
           PYEOF
         shell: bash
 
-      - name: Split large MP4s into GitHub-friendly chunks (≤ 95MB)
+      - name: Split large video files (>95MB) for GitHub
         run: |
-          echo ">> بررسی و تقسیم فایل‌های بزرگ‌تر از 95 مگابایت..."
-          find downloads -type f -name "*.mp4" -size +95M | while read file; do
-            echo "تقسیم: $file"
-            split -b 95M -d "$file" "${file}.part"
-            rm "$file"
-            echo "فایل اصلی حذف و بخش‌ها ایجاد شدند."
-          done
-          echo "لیست فایل‌ها در downloads:"
+          echo ">> بررسی فایل‌های بزرگ‌تر از 95MB..."
+          large_files=$(find downloads -type f -name "*.mp4" -size +95M)
+          if [ -n "$large_files" ]; then
+            while IFS= read -r file; do
+              echo "در حال تقسیم: $file"
+              split -b 95M -d "$file" "${file}.part"
+              rm "$file"
+              echo "فایل اصلی حذف و تکه‌ها ساخته شدند."
+            done <<< "$large_files"
+          else
+            echo "هیچ فایل بزرگی یافت نشد."
+          fi
+          echo "لیست فایل‌های موجود:"
           find downloads -type f | sort
+        shell: bash
 
-      - name: Commit and push videos to repository
+      - name: Commit and push to repository
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # فقط فایل‌های جدید/تغییرکرده را اضافه کن
           git add downloads/
-
-          # ★ کلید حل مشکل: فقط در صورت وجود تغییرات commit کن
-          if [[ -n $(git status --porcelain) ]]; then
-            git commit -m "Add downloaded videos from ${{ github.event.inputs.channel_url }}"
+          
+          # بررسی تغییرات با روش امن (بدون شکست خودکار)
+          if git diff --cached --quiet; then
+            echo "هیچ تغییری برای commit وجود ندارد."
+            exit 0
+          fi
+          
+          git commit -m "Add videos from ${{ github.event.inputs.channel_url }}"
+          
+          # تلاش برای push؛ اگر به دلیل conflict خطا داد، rebase و دوباره push کن
+          if ! git push origin HEAD:${{ github.ref_name }}; then
+            echo "Push اولیه ناموفق بود. تلاش برای همگام‌سازی مجدد..."
             git pull --rebase origin ${{ github.ref_name }}
             git push origin HEAD:${{ github.ref_name }}
-          else
-            echo "هیچ فایل جدیدی برای commit وجود ندارد."
           fi
         shell: bash
 
-      - name: Show final tree structure
+      - name: Show final directory tree
         run: |
           echo "========== ساختار پوشه downloads =========="
           find downloads -type f | head -n 50
-          echo "تعداد فایل‌ها: $(find downloads -type f | wc -l)"
+          echo "تعداد کل فایل‌ها: $(find downloads -type f | wc -l)"

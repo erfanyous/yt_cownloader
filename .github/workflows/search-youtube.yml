@@ -1,0 +1,143 @@
+name: Search YouTube and List Results
+
+on:
+  workflow_dispatch:
+    inputs:
+      search_query:
+        description: 'عبارت جستجو (مثلاً Python tutorial)'
+        required: true
+        type: string
+      max_results:
+        description: 'تعداد نتایج (حداکثر ۵۰)'
+        required: true
+        type: number
+        default: 10
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  search-and-save:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-pip curl jq || true
+
+      - name: Install latest yt-dlp
+        run: pip3 install --break-system-packages "yt-dlp[default]" || true
+
+      - name: Search and generate Markdown
+        run: |
+          set +e
+          python3 << 'PYEOF'
+          import os, sys, json, subprocess, traceback, re
+
+          try:
+              query = """${{ github.event.inputs.search_query }}""".strip()
+              max_res = int("""${{ github.event.inputs.max_results }}""")
+              if max_res > 50:
+                  max_res = 50
+
+              os.makedirs("search_results", exist_ok=True)
+
+              if not query:
+                  with open("search_results/EMPTY_QUERY.md", "w", encoding="utf-8") as f:
+                      f.write("# ⚠️ No search query provided.")
+                  sys.exit(0)
+
+              # ایمن‌سازی نام فایل
+              safe_query = re.sub(r'[^a-zA-Z0-9\u0600-\u06FF\s]', '', query)[:50].strip().replace(' ', '_')
+              if not safe_query:
+                  safe_query = "search"
+
+              # استفاده از yt-dlp با قابلیت جستجو
+              search_term = f"ytsearch{max_res}:{query}"
+              print(f">> Searching for: {query} (max {max_res} results)")
+
+              def safe_run(args, label=""):
+                  try:
+                      res = subprocess.run(args, capture_output=True, text=True, timeout=120)
+                      if res.returncode != 0:
+                          print(f"  ⚠️ {label} failed (code {res.returncode}): {res.stderr.strip()[-150:]}")
+                          return None
+                      return [json.loads(l) for l in res.stdout.splitlines() if l.strip()]
+                  except Exception as e:
+                      print(f"  ⚠️ {label} exception: {e}")
+                      return None
+
+              results = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", search_term], "search")
+              if results is None:
+                  md_lines = ["# ❌ Search failed", "", "Could not retrieve results. Please try again later."]
+              else:
+                  md_lines = [f"# 🔍 Search Results for: \"{query}\"", f"Showing top {len(results)} videos", ""]
+                  for idx, v in enumerate(results):
+                      title = v.get('title', f'Video {idx+1}').strip()
+                      duration = v.get('duration')
+                      if duration is not None and duration <= 60:
+                          title += " 📱(Short)"
+
+                      video_id = v.get('id')
+                      video_url = v.get('url')
+                      if not video_url and video_id:
+                          video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+                      thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg" if video_id else ""
+
+                      md_lines.append(f"### {idx+1}. {title}")
+                      if video_url:
+                          md_lines.append(f"🔗 [Watch on YouTube]({video_url})")
+                      if thumbnail_url:
+                          md_lines.append(f"![Thumbnail]({thumbnail_url})")
+                      md_lines.append("")   # فاصله
+
+              # ذخیره فایل
+              filepath = f"search_results/{safe_query}.md"
+              with open(filepath, "w", encoding="utf-8") as f:
+                  f.write("\n".join(md_lines))
+              print(f"\n✅ Markdown file saved: {filepath}")
+
+          except Exception as e:
+              error_msg = f"# ❌ Unexpected Error\n\n```\n{traceback.format_exc()}\n```"
+              with open("search_results/ERROR_UNEXPECTED.md", "w", encoding="utf-8") as f:
+                  f.write(error_msg)
+              print(f"Unexpected error: {traceback.format_exc()}")
+          finally:
+              sys.exit(0)
+          PYEOF
+        shell: bash
+
+      - name: Commit and push results
+        run: |
+          set +e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add search_results/
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Add YouTube search results for \"${{ github.event.inputs.search_query }}\""
+          if ! git push origin HEAD:${{ github.ref_name }}; then
+            echo "Push failed, attempting rebase..."
+            git pull --rebase origin ${{ github.ref_name }}
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+        shell: bash
+
+      - name: Show final Markdown (excerpt)
+        run: |
+          echo "========== FINAL MARKDOWN =========="
+          find search_results -type f -name "*.md" | while read f; do
+            echo "--- $f (first 30 lines) ---"
+            head -n 30 "$f"
+          done

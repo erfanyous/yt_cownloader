@@ -1,4 +1,4 @@
-name: List Channel Videos
+name: List Channel Videos (Full Playlist Tree)
 
 on:
   workflow_dispatch:
@@ -31,74 +31,103 @@ jobs:
       - name: Install latest yt-dlp
         run: pip3 install --break-system-packages "yt-dlp[default]"
 
-      - name: Extract video list and generate tree
+      - name: Extract full playlist tree
         run: |
           python3 << 'PYEOF'
           import os, sys, json, subprocess
+          from collections import defaultdict
 
           channel_url = "${{ github.event.inputs.channel_url }}"
-
-          print(">> دریافت لیست ویدیوهای کانال...")
-          cmd = ["yt-dlp", "--flat-playlist", "--dump-json", channel_url]
-          try:
-              result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-              videos = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-          except Exception as e:
-              print(f"خطا در دریافت لیست: {e}")
+          if not channel_url:
+              print("لینک کانال خالی است.")
               sys.exit(1)
 
-          if not videos:
-              print("هیچ ویدیویی یافت نشد.")
-              sys.exit(0)
+          print(">> دریافت لیست پلی‌لیست‌های کانال...")
+          try:
+              # گرفتن لیست تمام پلی‌لیست‌ها از برگه Playlists
+              playlists_cmd = ["yt-dlp", "--flat-playlist", "--dump-json",
+                               f"{channel_url}/playlists"]
+              res = subprocess.run(playlists_cmd, capture_output=True, text=True, check=True)
+              playlists_info = [json.loads(line) for line in res.stdout.splitlines() if line.strip()]
+          except Exception as e:
+              print(f"خطا در دریافت پلی‌لیست‌ها: {e}")
+              sys.exit(1)
 
-          # استخراج نام کانال از اولین ویدیو
-          channel_name = videos[0].get('channel', 'Unknown Channel')
-          # ایمن‌سازی نام برای فایل
-          safe_channel = channel_name.replace('/', '_').replace('\\', '_').replace(':', '_')[:60]
+          print(f">> {len(playlists_info)} پلی‌لیست پیدا شد.")
 
-          # سازماندهی ویدیوها در پلی‌لیست‌ها
-          from collections import defaultdict
-          playlists = defaultdict(list)
-          no_playlist_videos = []
+          # استخراج نام کانال از اولین پلی‌لیست (در صورت وجود)
+          channel_name = "Unknown Channel"
+          if playlists_info:
+              channel_name = playlists_info[0].get('channel', channel_name)
 
-          for v in videos:
-              title = v.get('title', 'Untitled').strip()
-              if not title:
-                  continue
-              pl = v.get('playlist_title')
-              if pl and pl != 'NA':
-                  playlists[pl].append(title)
-              else:
-                  no_playlist_videos.append(title)
-
-          # ساخت درخت متنی
+          # ساخت ساختار درختی
           tree_lines = []
           tree_lines.append(f"Channel: {channel_name}")
-          tree_lines.append("=" * 50)
+          tree_lines.append("=" * 60)
 
-          for pl_name, pl_videos in sorted(playlists.items()):
-              tree_lines.append(f"\n📁 Playlist: {pl_name}")
-              for v in pl_videos:
-                  tree_lines.append(f"   ├── {v}")
-              # آخرین آیتم را به └── تغییر می‌دهیم (اختیاری)
-              # برای سادگی فعلاً همه ├── می‌گذاریم (می‌توان بعداً اصلاح کرد)
+          # نگهداری مجموعه‌ای از ID ویدیوهایی که در پلی‌لیست‌ها قرار می‌گیرند
+          in_playlist_ids = set()
 
-          if no_playlist_videos:
-              tree_lines.append(f"\n📁 No Playlist")
-              for v in no_playlist_videos:
-                  tree_lines.append(f"   ├── {v}")
+          # 1. پردازش هر پلی‌لیست
+          for pl in playlists_info:
+              pl_url = pl.get('url')
+              pl_title = pl.get('title', 'بدون نام').replace('/', '_')
+              if not pl_url:
+                  continue
 
-          tree_content = "\n".join(tree_lines)
+              print(f"  📥 دریافت ویدیوهای پلی‌لیست: {pl_title}")
+              try:
+                  videos_cmd = ["yt-dlp", "--flat-playlist", "--dump-json", pl_url]
+                  vres = subprocess.run(videos_cmd, capture_output=True, text=True, check=True)
+                  videos = [json.loads(line) for line in vres.stdout.splitlines() if line.strip()]
+              except Exception:
+                  print(f"    ⚠️ خطا در دریافت ویدیوهای '{pl_title}' – نادیده گرفته شد.")
+                  continue
 
-          # ذخیره در پوشه channel_lists
+              if not videos:
+                  tree_lines.append(f"\n📁 Playlist: {pl_title} (خالی)")
+                  continue
+
+              tree_lines.append(f"\n📁 Playlist: {pl_title} ({len(videos)} ویدیو)")
+              for i, v in enumerate(videos):
+                  vid_id = v.get('id')
+                  if vid_id:
+                      in_playlist_ids.add(vid_id)
+                  title = v.get('title', 'Untitled').strip()
+                  prefix = "   └──" if i == len(videos) - 1 else "   ├──"
+                  tree_lines.append(f"{prefix} {title}")
+
+          # 2. ویدیوهای بدون پلی‌لیست (از برگه Videos کانال)
+          print(">> دریافت ویدیوهای بدون پلی‌لیست...")
+          try:
+              all_cmd = ["yt-dlp", "--flat-playlist", "--dump-json", channel_url]
+              all_res = subprocess.run(all_cmd, capture_output=True, text=True, check=True)
+              all_videos = [json.loads(line) for line in all_res.stdout.splitlines() if line.strip()]
+          except Exception:
+              all_videos = []
+
+          unplaylisted = []
+          for v in all_videos:
+              vid_id = v.get('id')
+              if vid_id and vid_id not in in_playlist_ids:
+                  unplaylisted.append(v)
+
+          if unplaylisted:
+              tree_lines.append(f"\n📁 No Playlist ({len(unplaylisted)} ویدیو)")
+              for i, v in enumerate(unplaylisted):
+                  title = v.get('title', 'Untitled').strip()
+                  prefix = "   └──" if i == len(unplaylisted) - 1 else "   ├──"
+                  tree_lines.append(f"{prefix} {title}")
+
+          # ذخیره در فایل
+          safe_channel = channel_name.replace('/', '_')[:60]
           os.makedirs("channel_lists", exist_ok=True)
-          filename = f"channel_lists/{safe_channel}_video_list.txt"
+          filename = f"channel_lists/{safe_channel}_full_tree.txt"
           with open(filename, 'w', encoding='utf-8') as f:
-              f.write(tree_content)
+              f.write("\n".join(tree_lines))
 
-          print(f"لیست در فایل {filename} ذخیره شد.")
-          print(f"تعداد کل ویدیوها: {len(videos)}")
-          print("پایان.")
+          print(f"\n✅ فایل '{filename}' ذخیره شد.")
+          print(f"تعداد کل ویدیوها: {len(in_playlist_ids) + len(unplaylisted)}")
           PYEOF
         shell: bash
 
@@ -114,7 +143,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Add channel video list for ${{ github.event.inputs.channel_url }}"
+          git commit -m "Add full playlist tree for ${{ github.event.inputs.channel_url }}"
 
           if ! git push origin HEAD:${{ github.ref_name }}; then
             echo "Push اولیه ناموفق، تلاش مجدد با rebase..."
@@ -123,10 +152,10 @@ jobs:
           fi
         shell: bash
 
-      - name: Show saved list
+      - name: Show final tree
         run: |
-          echo "========== محتوای فایل لیست =========="
-          find channel_lists -type f -name "*.txt" | while read f; do
+          echo "========== درخت نمایشی =========="
+          find channel_lists -type f -name "*_full_tree.txt" | while read f; do
             echo "--- $f ---"
             cat "$f"
           done

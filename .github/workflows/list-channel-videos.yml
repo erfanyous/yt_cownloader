@@ -35,7 +35,7 @@ jobs:
         run: |
           set +e
           python3 << 'PYEOF'
-          import os, sys, json, subprocess, traceback, html
+          import os, sys, json, subprocess, traceback
 
           try:
               raw_url = """${{ github.event.inputs.channel_url }}""".strip()
@@ -48,9 +48,13 @@ jobs:
 
               channel_url = raw_url.rstrip('/')
 
-              def safe_run(args, label=""):
+              def safe_run(args, label="", full_info=False):
+                  """
+                  اجرای یک دستور yt-dlp.
+                  اگر full_info=True باشد، دیگر از flat-playlist استفاده نمی‌کند.
+                  """
                   try:
-                      res = subprocess.run(args, capture_output=True, text=True, timeout=120)
+                      res = subprocess.run(args, capture_output=True, text=True, timeout=300)
                       if res.returncode != 0:
                           print(f"  ⚠️ {label} failed (code {res.returncode}): {res.stderr.strip()[-150:]}")
                           return None
@@ -78,7 +82,6 @@ jobs:
               in_playlist_ids = set()
 
               def add_video_md(video, indent="  "):
-                  """افزودن عنوان، لینک، تصویر کاور و توضیحات یک ویدیو"""
                   title = video.get('title', 'Untitled').strip()
                   duration = video.get('duration')
                   if duration is not None and duration <= 60:
@@ -90,40 +93,33 @@ jobs:
                       video_url = f"https://www.youtube.com/watch?v={video_id}"
 
                   thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg" if video_id else ""
-                  description = video.get('description')
+                  description = video.get('description', '')  # اکنون موجود است
 
-                  # عنوان
                   md_lines.append(f"{indent}- 🎬 **{title}**")
-
-                  # لینک یوتیوب
                   if video_url:
                       md_lines.append(f"{indent}    🔗 [Watch on YouTube]({video_url})")
-
-                  # تصویر کاور با اندازه استاندارد ۳۲۰ پیکسل
                   if thumbnail_url:
-                      md_lines.append(f'{indent}    <img src="{thumbnail_url}" width="320" alt="Thumbnail" />')
-
-                  # توضیحات (اگر وجود داشته باشد) به‌صورت نقل‌قول زیبا
+                      md_lines.append(f"{indent}    ![Thumbnail]({thumbnail_url})")
+                  # توضیحات در یک بلوک جمع‌شونده
                   if description:
-                      # تبدیل خطوط به نقل‌قول (پیشوند > )
-                      desc_lines = description.splitlines()
-                      for dl in desc_lines:
-                          # هر خط را با > شروع می‌کنیم؛ خط خالی را نیز با > خالی می‌گذاریم تا فاصله بیفتد.
-                          md_lines.append(f"{indent}    > {dl}")
-                      # یک خط خالی بعد از نقل‌قول برای فاصله بصری
-                      md_lines.append("")
-                  else:
-                      # اگر توضیح نبود، باز هم یک خط خالی برای فاصله بین ویدیوها
-                      md_lines.append("")
+                      # حذف خطوط خالی اضافی و محدود کردن طول (اختیاری)
+                      desc_clean = description.strip().replace('\n', '\\\n')  # شکستن خط در markdown
+                      md_lines.append(f"{indent}    <details>")
+                      md_lines.append(f"{indent}    <summary>📝 Description</summary>")
+                      md_lines.append(f"{indent}    \n{desc_clean}\n")
+                      md_lines.append(f"{indent}    </details>")
+                  # جداکننده ملایم بین ویدیوها (فقط در انتهای هر ویدیو)
+                  md_lines.append(f"")
 
-              # پردازش پلی‌لیست‌ها
+              # 3. پردازش هر پلی‌لیست (اکنون با دانلود اطلاعات کامل)
               for pl in playlists:
                   pl_url = pl.get('url')
                   pl_title = pl.get('title', 'Unnamed').replace('/', '_')
                   if not pl_url:
                       continue
-                  print(f"  📥 Processing playlist: {pl_title}")
-                  vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", pl_url], pl_title)
+                  print(f"  📥 Processing playlist: {pl_title} (full info)")
+                  # استفاده از full dump بدون flat-playlist
+                  vids = safe_run(["yt-dlp", "--dump-json", pl_url], pl_title)
                   if vids is None:
                       md_lines.append(f"\n## 📁 {pl_title} (⚠️ unavailable)\n")
                       continue
@@ -136,9 +132,9 @@ jobs:
                       if v.get('id'): in_playlist_ids.add(v['id'])
                       add_video_md(v, indent="  ")
 
-              # ویدیوهای بدون پلی‌لیست
-              print(">> Fetching non-playlisted videos...")
-              all_vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", channel_url], "channel")
+              # 4. ویدیوهای بدون پلی‌لیست (همچنان با اطلاعات کامل)
+              print(">> Fetching non-playlisted videos (full info)...")
+              all_vids = safe_run(["yt-dlp", "--dump-json", channel_url], "channel")
               unplaylisted = []
               if all_vids:
                   for v in all_vids:
@@ -152,7 +148,7 @@ jobs:
               if not playlists and not all_vids:
                   md_lines.append("\n⚠️ Could not retrieve any video data for this channel.\n")
 
-              # ذخیره‌سازی
+              # 5. ذخیره Markdown
               safe_name = channel_name.replace('/', '_')[:60]
               filepath = f"channel_lists/{safe_name}_full_tree.md"
               with open(filepath, "w", encoding="utf-8") as f:
@@ -179,7 +175,7 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "Update channel video list (Markdown with thumbnails & description)"
+          git commit -m "Update channel video list (Markdown with descriptions)"
           if ! git push origin HEAD:${{ github.ref_name }}; then
             echo "Push failed, attempting rebase..."
             git pull --rebase origin ${{ github.ref_name }}

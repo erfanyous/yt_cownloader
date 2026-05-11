@@ -31,7 +31,7 @@ jobs:
       - name: Install latest yt-dlp
         run: pip3 install --break-system-packages "yt-dlp[default]" || true
 
-      - name: Extract full playlist tree
+      - name: Extract full playlist tree as Markdown
         run: |
           set +e
           python3 << 'PYEOF'
@@ -41,8 +41,8 @@ jobs:
           os.makedirs("channel_lists", exist_ok=True)
 
           if not raw_url:
-              with open("channel_lists/EMPTY_INPUT.txt", "w", encoding="utf-8") as f:
-                  f.write("No channel URL was provided.")
+              with open("channel_lists/EMPTY_INPUT.md", "w", encoding="utf-8") as f:
+                  f.write("# ⚠️ No channel URL provided.")
               sys.exit(0)
 
           channel_url = raw_url.rstrip('/')
@@ -72,34 +72,36 @@ jobs:
               if probe and probe[0].get('channel'):
                   channel_name = probe[0]['channel']
 
-          tree = [f"Channel: {channel_name}", "=" * 60]
-          in_playlist = set()
+          md_lines = []
+          md_lines.append(f"# 📺 {channel_name}\n")
+          md_lines.append("---")
 
-          def add_video_lines(video, is_last):
-              """ساخت خطوط عنوان، لینک و تصویر کاور برای یک ویدیو"""
+          in_playlist_ids = set()
+
+          def add_video_md(video, indent="  "):
+              """افزودن خطوط مربوط به یک ویدیو (عنوان، لینک، تصویر کاور) به لیست Markdown"""
               title = video.get('title', 'Untitled').strip()
               duration = video.get('duration')
               if duration is not None and duration <= 60:
-                  title += " (Short)"
+                  title += " 📱(Short)"
 
-              video_url = video.get('url')
               video_id = video.get('id')
+              video_url = video.get('url')
               if not video_url and video_id:
                   video_url = f"https://www.youtube.com/watch?v={video_id}"
+
               thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg" if video_id else ""
 
-              # پیشوند اصلی
-              prefix = "   └── " if is_last else "   ├── "
-              tree.append(f"{prefix}{title}")
-
-              # زیرشاخه‌ها (لینک و کاور)
-              sub_prefix = "       " if is_last else "   │   "
+              # خط عنوان ویدیو
+              md_lines.append(f"{indent}- 🎬 **{title}**")
+              # لینک یوتیوب
               if video_url:
-                  tree.append(f"{sub_prefix}├── 🔗 {video_url}")
+                  md_lines.append(f"{indent}    🔗 [Watch on YouTube]({video_url})")
+              # تصویر کاور (نمایش داده می‌شود)
               if thumbnail_url:
-                  tree.append(f"{sub_prefix}└── 🖼️ {thumbnail_url}")
+                  md_lines.append(f"{indent}    ![Thumbnail]({thumbnail_url})")
 
-          # 3. پردازش پلی‌لیست‌ها
+          # 3. پردازش هر پلی‌لیست
           for pl in playlists:
               pl_url = pl.get('url')
               pl_title = pl.get('title', 'Unnamed').replace('/', '_')
@@ -108,15 +110,16 @@ jobs:
               print(f"  📥 Processing playlist: {pl_title}")
               vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", pl_url], pl_title)
               if vids is None:
-                  tree.append(f"\n📁 Playlist: {pl_title} (unavailable)")
+                  md_lines.append(f"\n## 📁 {pl_title} (⚠️ unavailable)\n")
                   continue
               if not vids:
-                  tree.append(f"\n📁 Playlist: {pl_title} (empty)")
+                  md_lines.append(f"\n## 📁 {pl_title} (empty)\n")
                   continue
-              tree.append(f"\n📁 Playlist: {pl_title} ({len(vids)} videos)")
-              for i, v in enumerate(vids):
-                  if v.get('id'): in_playlist.add(v['id'])
-                  add_video_lines(v, i == len(vids)-1)
+
+              md_lines.append(f"\n## 📁 {pl_title} ({len(vids)} videos)\n")
+              for v in vids:
+                  if v.get('id'): in_playlist_ids.add(v['id'])
+                  add_video_md(v, indent="  ")
 
           # 4. ویدیوهای بدون پلی‌لیست
           print(">> Fetching non-playlisted videos...")
@@ -124,22 +127,22 @@ jobs:
           unplaylisted = []
           if all_vids:
               for v in all_vids:
-                  if v.get('id') and v['id'] not in in_playlist:
+                  if v.get('id') and v['id'] not in in_playlist_ids:
                       unplaylisted.append(v)
           if unplaylisted:
-              tree.append(f"\n📁 No Playlist ({len(unplaylisted)} videos)")
-              for i, v in enumerate(unplaylisted):
-                  add_video_lines(v, i == len(unplaylisted)-1)
+              md_lines.append(f"\n## 📁 No Playlist ({len(unplaylisted)} videos)\n")
+              for v in unplaylisted:
+                  add_video_md(v, indent="  ")
 
           if not playlists and not all_vids:
-              tree.append("\n⚠️ Could not retrieve any video data for this channel.")
+              md_lines.append("\n⚠️ Could not retrieve any video data for this channel. Please check the URL or channel availability.\n")
 
-          # 5. ذخیره فایل
+          # 5. ذخیره فایل Markdown
           safe_name = channel_name.replace('/', '_')[:60]
-          filepath = f"channel_lists/{safe_name}_full_tree.txt"
+          filepath = f"channel_lists/{safe_name}_full_tree.md"
           with open(filepath, "w", encoding="utf-8") as f:
-              f.write("\n".join(tree))
-          print(f"\n✅ File saved: {filepath}")
+              f.write("\n".join(md_lines))
+          print(f"\n✅ Markdown file saved: {filepath}")
           PYEOF
         shell: bash
 
@@ -153,7 +156,7 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "Update channel video list"
+          git commit -m "Update channel video list (Markdown with thumbnails)"
           if ! git push origin HEAD:${{ github.ref_name }}; then
             echo "Push failed, attempting rebase..."
             git pull --rebase origin ${{ github.ref_name }}
@@ -161,10 +164,10 @@ jobs:
           fi
         shell: bash
 
-      - name: Show final tree
+      - name: Show final Markdown (excerpt)
         run: |
-          echo "========== FINAL TREE =========="
-          find channel_lists -type f -name "*.txt" | while read f; do
-            echo "--- $f ---"
-            cat "$f"
+          echo "========== FINAL MARKDOWN =========="
+          find channel_lists -type f -name "*.md" | while read f; do
+            echo "--- $f (first 30 lines) ---"
+            head -n 30 "$f"
           done

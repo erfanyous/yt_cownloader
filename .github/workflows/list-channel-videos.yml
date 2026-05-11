@@ -37,6 +37,7 @@ jobs:
           python3 << 'PYEOF'
           import os, sys, json, subprocess, traceback
 
+          # تضمین خروج امن
           try:
               raw_url = """${{ github.event.inputs.channel_url }}""".strip()
               os.makedirs("channel_lists", exist_ok=True)
@@ -48,13 +49,9 @@ jobs:
 
               channel_url = raw_url.rstrip('/')
 
-              def safe_run(args, label="", full_info=False):
-                  """
-                  اجرای یک دستور yt-dlp.
-                  اگر full_info=True باشد، دیگر از flat-playlist استفاده نمی‌کند.
-                  """
+              def safe_run(args, label=""):
                   try:
-                      res = subprocess.run(args, capture_output=True, text=True, timeout=300)
+                      res = subprocess.run(args, capture_output=True, text=True, timeout=120)
                       if res.returncode != 0:
                           print(f"  ⚠️ {label} failed (code {res.returncode}): {res.stderr.strip()[-150:]}")
                           return None
@@ -63,10 +60,12 @@ jobs:
                       print(f"  ⚠️ {label} exception: {e}")
                       return None
 
+              # 1. دریافت پلی‌لیست‌ها
               print(">> Fetching playlists...")
               playlists = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", f"{channel_url}/playlists"], "playlists")
               playlists = playlists if playlists else []
 
+              # 2. حدس نام کانال
               channel_name = "Unknown Channel"
               if playlists:
                   channel_name = playlists[0].get('channel', channel_name)
@@ -93,33 +92,21 @@ jobs:
                       video_url = f"https://www.youtube.com/watch?v={video_id}"
 
                   thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg" if video_id else ""
-                  description = video.get('description', '')  # اکنون موجود است
 
                   md_lines.append(f"{indent}- 🎬 **{title}**")
                   if video_url:
                       md_lines.append(f"{indent}    🔗 [Watch on YouTube]({video_url})")
                   if thumbnail_url:
                       md_lines.append(f"{indent}    ![Thumbnail]({thumbnail_url})")
-                  # توضیحات در یک بلوک جمع‌شونده
-                  if description:
-                      # حذف خطوط خالی اضافی و محدود کردن طول (اختیاری)
-                      desc_clean = description.strip().replace('\n', '\\\n')  # شکستن خط در markdown
-                      md_lines.append(f"{indent}    <details>")
-                      md_lines.append(f"{indent}    <summary>📝 Description</summary>")
-                      md_lines.append(f"{indent}    \n{desc_clean}\n")
-                      md_lines.append(f"{indent}    </details>")
-                  # جداکننده ملایم بین ویدیوها (فقط در انتهای هر ویدیو)
-                  md_lines.append(f"")
 
-              # 3. پردازش هر پلی‌لیست (اکنون با دانلود اطلاعات کامل)
+              # 3. پردازش هر پلی‌لیست
               for pl in playlists:
                   pl_url = pl.get('url')
                   pl_title = pl.get('title', 'Unnamed').replace('/', '_')
                   if not pl_url:
                       continue
-                  print(f"  📥 Processing playlist: {pl_title} (full info)")
-                  # استفاده از full dump بدون flat-playlist
-                  vids = safe_run(["yt-dlp", "--dump-json", pl_url], pl_title)
+                  print(f"  📥 Processing playlist: {pl_title}")
+                  vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", pl_url], pl_title)
                   if vids is None:
                       md_lines.append(f"\n## 📁 {pl_title} (⚠️ unavailable)\n")
                       continue
@@ -132,9 +119,9 @@ jobs:
                       if v.get('id'): in_playlist_ids.add(v['id'])
                       add_video_md(v, indent="  ")
 
-              # 4. ویدیوهای بدون پلی‌لیست (همچنان با اطلاعات کامل)
-              print(">> Fetching non-playlisted videos (full info)...")
-              all_vids = safe_run(["yt-dlp", "--dump-json", channel_url], "channel")
+              # 4. ویدیوهای بدون پلی‌لیست
+              print(">> Fetching non-playlisted videos...")
+              all_vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", channel_url], "channel")
               unplaylisted = []
               if all_vids:
                   for v in all_vids:
@@ -146,9 +133,9 @@ jobs:
                       add_video_md(v, indent="  ")
 
               if not playlists and not all_vids:
-                  md_lines.append("\n⚠️ Could not retrieve any video data for this channel.\n")
+                  md_lines.append("\n⚠️ Could not retrieve any video data for this channel. Please check the URL or channel availability.\n")
 
-              # 5. ذخیره Markdown
+              # 5. ذخیره فایل Markdown
               safe_name = channel_name.replace('/', '_')[:60]
               filepath = f"channel_lists/{safe_name}_full_tree.md"
               with open(filepath, "w", encoding="utf-8") as f:
@@ -156,12 +143,13 @@ jobs:
               print(f"\n✅ Markdown file saved: {filepath}")
 
           except Exception as e:
+              # در صورت هر خطای پیش‌بینی‌نشده، آن را در فایلی یادداشت کن و با کد صفر خارج شو
               error_msg = f"# ❌ Unexpected Error\n\n```\n{traceback.format_exc()}\n```"
               with open("channel_lists/ERROR_UNEXPECTED.md", "w", encoding="utf-8") as f:
                   f.write(error_msg)
               print(f"Unexpected error: {traceback.format_exc()}")
           finally:
-              sys.exit(0)
+              sys.exit(0)   # همیشه با 0 خارج شو
           PYEOF
         shell: bash
 
@@ -175,7 +163,7 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "Update channel video list (Markdown with descriptions)"
+          git commit -m "Update channel video list (Markdown with thumbnails)"
           if ! git push origin HEAD:${{ github.ref_name }}; then
             echo "Push failed, attempting rebase..."
             git pull --rebase origin ${{ github.ref_name }}

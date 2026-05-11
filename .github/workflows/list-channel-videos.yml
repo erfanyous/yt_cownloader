@@ -35,114 +35,121 @@ jobs:
         run: |
           set +e
           python3 << 'PYEOF'
-          import os, json, subprocess
+          import os, sys, json, subprocess, traceback
 
-          raw_url = """${{ github.event.inputs.channel_url }}""".strip()
-          os.makedirs("channel_lists", exist_ok=True)
+          # تضمین خروج امن
+          try:
+              raw_url = """${{ github.event.inputs.channel_url }}""".strip()
+              os.makedirs("channel_lists", exist_ok=True)
 
-          if not raw_url:
-              with open("channel_lists/EMPTY_INPUT.md", "w", encoding="utf-8") as f:
-                  f.write("# ⚠️ No channel URL provided.")
-              sys.exit(0)
+              if not raw_url:
+                  with open("channel_lists/EMPTY_INPUT.md", "w", encoding="utf-8") as f:
+                      f.write("# ⚠️ No channel URL provided.")
+                  sys.exit(0)
 
-          channel_url = raw_url.rstrip('/')
+              channel_url = raw_url.rstrip('/')
 
-          def safe_run(args, label=""):
-              try:
-                  res = subprocess.run(args, capture_output=True, text=True, timeout=120)
-                  if res.returncode != 0:
-                      print(f"  ⚠️ {label} failed (code {res.returncode}): {res.stderr.strip()[-150:]}")
+              def safe_run(args, label=""):
+                  try:
+                      res = subprocess.run(args, capture_output=True, text=True, timeout=120)
+                      if res.returncode != 0:
+                          print(f"  ⚠️ {label} failed (code {res.returncode}): {res.stderr.strip()[-150:]}")
+                          return None
+                      return [json.loads(l) for l in res.stdout.splitlines() if l.strip()]
+                  except Exception as e:
+                      print(f"  ⚠️ {label} exception: {e}")
                       return None
-                  return [json.loads(l) for l in res.stdout.splitlines() if l.strip()]
-              except Exception as e:
-                  print(f"  ⚠️ {label} exception: {e}")
-                  return None
 
-          # 1. دریافت پلی‌لیست‌ها
-          print(">> Fetching playlists...")
-          playlists = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", f"{channel_url}/playlists"], "playlists")
-          playlists = playlists if playlists else []
+              # 1. دریافت پلی‌لیست‌ها
+              print(">> Fetching playlists...")
+              playlists = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", f"{channel_url}/playlists"], "playlists")
+              playlists = playlists if playlists else []
 
-          # 2. حدس نام کانال
-          channel_name = "Unknown Channel"
-          if playlists:
-              channel_name = playlists[0].get('channel', channel_name)
-          else:
-              probe = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", channel_url], "channel probe")
-              if probe and probe[0].get('channel'):
-                  channel_name = probe[0]['channel']
+              # 2. حدس نام کانال
+              channel_name = "Unknown Channel"
+              if playlists:
+                  channel_name = playlists[0].get('channel', channel_name)
+              else:
+                  probe = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", channel_url], "channel probe")
+                  if probe and probe[0].get('channel'):
+                      channel_name = probe[0]['channel']
 
-          md_lines = []
-          md_lines.append(f"# 📺 {channel_name}\n")
-          md_lines.append("---")
+              md_lines = []
+              md_lines.append(f"# 📺 {channel_name}\n")
+              md_lines.append("---")
 
-          in_playlist_ids = set()
+              in_playlist_ids = set()
 
-          def add_video_md(video, indent="  "):
-              """افزودن خطوط مربوط به یک ویدیو (عنوان، لینک، تصویر کاور) به لیست Markdown"""
-              title = video.get('title', 'Untitled').strip()
-              duration = video.get('duration')
-              if duration is not None and duration <= 60:
-                  title += " 📱(Short)"
+              def add_video_md(video, indent="  "):
+                  title = video.get('title', 'Untitled').strip()
+                  duration = video.get('duration')
+                  if duration is not None and duration <= 60:
+                      title += " 📱(Short)"
 
-              video_id = video.get('id')
-              video_url = video.get('url')
-              if not video_url and video_id:
-                  video_url = f"https://www.youtube.com/watch?v={video_id}"
+                  video_id = video.get('id')
+                  video_url = video.get('url')
+                  if not video_url and video_id:
+                      video_url = f"https://www.youtube.com/watch?v={video_id}"
 
-              thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg" if video_id else ""
+                  thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg" if video_id else ""
 
-              # خط عنوان ویدیو
-              md_lines.append(f"{indent}- 🎬 **{title}**")
-              # لینک یوتیوب
-              if video_url:
-                  md_lines.append(f"{indent}    🔗 [Watch on YouTube]({video_url})")
-              # تصویر کاور (نمایش داده می‌شود)
-              if thumbnail_url:
-                  md_lines.append(f"{indent}    ![Thumbnail]({thumbnail_url})")
+                  md_lines.append(f"{indent}- 🎬 **{title}**")
+                  if video_url:
+                      md_lines.append(f"{indent}    🔗 [Watch on YouTube]({video_url})")
+                  if thumbnail_url:
+                      md_lines.append(f"{indent}    ![Thumbnail]({thumbnail_url})")
 
-          # 3. پردازش هر پلی‌لیست
-          for pl in playlists:
-              pl_url = pl.get('url')
-              pl_title = pl.get('title', 'Unnamed').replace('/', '_')
-              if not pl_url:
-                  continue
-              print(f"  📥 Processing playlist: {pl_title}")
-              vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", pl_url], pl_title)
-              if vids is None:
-                  md_lines.append(f"\n## 📁 {pl_title} (⚠️ unavailable)\n")
-                  continue
-              if not vids:
-                  md_lines.append(f"\n## 📁 {pl_title} (empty)\n")
-                  continue
+              # 3. پردازش هر پلی‌لیست
+              for pl in playlists:
+                  pl_url = pl.get('url')
+                  pl_title = pl.get('title', 'Unnamed').replace('/', '_')
+                  if not pl_url:
+                      continue
+                  print(f"  📥 Processing playlist: {pl_title}")
+                  vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", pl_url], pl_title)
+                  if vids is None:
+                      md_lines.append(f"\n## 📁 {pl_title} (⚠️ unavailable)\n")
+                      continue
+                  if not vids:
+                      md_lines.append(f"\n## 📁 {pl_title} (empty)\n")
+                      continue
 
-              md_lines.append(f"\n## 📁 {pl_title} ({len(vids)} videos)\n")
-              for v in vids:
-                  if v.get('id'): in_playlist_ids.add(v['id'])
-                  add_video_md(v, indent="  ")
+                  md_lines.append(f"\n## 📁 {pl_title} ({len(vids)} videos)\n")
+                  for v in vids:
+                      if v.get('id'): in_playlist_ids.add(v['id'])
+                      add_video_md(v, indent="  ")
 
-          # 4. ویدیوهای بدون پلی‌لیست
-          print(">> Fetching non-playlisted videos...")
-          all_vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", channel_url], "channel")
-          unplaylisted = []
-          if all_vids:
-              for v in all_vids:
-                  if v.get('id') and v['id'] not in in_playlist_ids:
-                      unplaylisted.append(v)
-          if unplaylisted:
-              md_lines.append(f"\n## 📁 No Playlist ({len(unplaylisted)} videos)\n")
-              for v in unplaylisted:
-                  add_video_md(v, indent="  ")
+              # 4. ویدیوهای بدون پلی‌لیست
+              print(">> Fetching non-playlisted videos...")
+              all_vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", channel_url], "channel")
+              unplaylisted = []
+              if all_vids:
+                  for v in all_vids:
+                      if v.get('id') and v['id'] not in in_playlist_ids:
+                          unplaylisted.append(v)
+              if unplaylisted:
+                  md_lines.append(f"\n## 📁 No Playlist ({len(unplaylisted)} videos)\n")
+                  for v in unplaylisted:
+                      add_video_md(v, indent="  ")
 
-          if not playlists and not all_vids:
-              md_lines.append("\n⚠️ Could not retrieve any video data for this channel. Please check the URL or channel availability.\n")
+              if not playlists and not all_vids:
+                  md_lines.append("\n⚠️ Could not retrieve any video data for this channel. Please check the URL or channel availability.\n")
 
-          # 5. ذخیره فایل Markdown
-          safe_name = channel_name.replace('/', '_')[:60]
-          filepath = f"channel_lists/{safe_name}_full_tree.md"
-          with open(filepath, "w", encoding="utf-8") as f:
-              f.write("\n".join(md_lines))
-          print(f"\n✅ Markdown file saved: {filepath}")
+              # 5. ذخیره فایل Markdown
+              safe_name = channel_name.replace('/', '_')[:60]
+              filepath = f"channel_lists/{safe_name}_full_tree.md"
+              with open(filepath, "w", encoding="utf-8") as f:
+                  f.write("\n".join(md_lines))
+              print(f"\n✅ Markdown file saved: {filepath}")
+
+          except Exception as e:
+              # در صورت هر خطای پیش‌بینی‌نشده، آن را در فایلی یادداشت کن و با کد صفر خارج شو
+              error_msg = f"# ❌ Unexpected Error\n\n```\n{traceback.format_exc()}\n```"
+              with open("channel_lists/ERROR_UNEXPECTED.md", "w", encoding="utf-8") as f:
+                  f.write(error_msg)
+              print(f"Unexpected error: {traceback.format_exc()}")
+          finally:
+              sys.exit(0)   # همیشه با 0 خارج شو
           PYEOF
         shell: bash
 

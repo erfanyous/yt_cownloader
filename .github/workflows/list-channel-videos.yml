@@ -33,122 +33,100 @@ jobs:
 
       - name: Extract full playlist tree
         run: |
-          set +e  # اجازه ادامه‌ی اجرا با وجود خطاهای غیرصفر
+          set +e
           python3 << 'PYEOF'
-          import os, sys, json, subprocess
-          from collections import defaultdict
+          import os, json, subprocess
 
           raw_url = """${{ github.event.inputs.channel_url }}""".strip()
+          os.makedirs("channel_lists", exist_ok=True)
+
           if not raw_url:
-              print("WARNING: Channel URL is empty.")
-              os.makedirs("channel_lists", exist_ok=True)
-              with open("channel_lists/EMPTY_URL.txt", "w", encoding="utf-8") as f:
+              with open("channel_lists/EMPTY_INPUT.txt", "w", encoding="utf-8") as f:
                   f.write("No channel URL was provided.")
               sys.exit(0)
-              
+
           channel_url = raw_url.rstrip('/')
 
-          # تابع کمکی برای اجرای امن yt-dlp
-          def run_ytdlp(args, description=""):
-              """اجرای یک دستور yt-dlp و برگرداندن لیست JSON یا None در صورت شکست"""
+          def safe_run(args, label=""):
               try:
-                  result = subprocess.run(args, capture_output=True, text=True, timeout=120)
-                  if result.returncode != 0:
-                      print(f"  ⚠️ {description} returned code {result.returncode}: {result.stderr.strip()[-100:]}")
+                  res = subprocess.run(args, capture_output=True, text=True, timeout=120)
+                  if res.returncode != 0:
+                      print(f"  ⚠️ {label} failed (code {res.returncode}): {res.stderr.strip()[-150:]}")
                       return None
-                  return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+                  return [json.loads(l) for l in res.stdout.splitlines() if l.strip()]
               except Exception as e:
-                  print(f"  ⚠️ Exception in {description}: {e}")
+                  print(f"  ⚠️ {label} exception: {e}")
                   return None
 
-          playlists_info = []
-          print(">> Attempting to fetch channel playlists...")
-          pl_data = run_ytdlp(
-              ["yt-dlp", "--flat-playlist", "--dump-json", f"{channel_url}/playlists"],
-              "playlists fetch"
-          )
-          if pl_data is not None:
-              playlists_info = pl_data
-              print(f">> Found {len(playlists_info)} playlists.")
-          else:
-              print(">> Could not fetch playlists. Continuing with standard videos only.")
+          # 1. دریافت پلی‌لیست‌ها
+          print(">> Fetching playlists...")
+          playlists = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", f"{channel_url}/playlists"], "playlists")
+          playlists = playlists if playlists else []
 
-          # تلاش برای یافتن نام کانال
+          # 2. حدس نام کانال
           channel_name = "Unknown Channel"
-          if playlists_info:
-              channel_name = playlists_info[0].get('channel', channel_name)
+          if playlists:
+              channel_name = playlists[0].get('channel', channel_name)
           else:
-              # یک بار ویدیوهای کانال را برای نام بررسی کنیم
-              probe = run_ytdlp(
-                  ["yt-dlp", "--flat-playlist", "--dump-json", channel_url],
-                  "channel probe"
-              )
+              probe = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", channel_url], "channel probe")
               if probe and probe[0].get('channel'):
                   channel_name = probe[0]['channel']
 
-          tree_lines = []
-          tree_lines.append(f"Channel: {channel_name}")
-          tree_lines.append("=" * 60)
+          tree = [f"Channel: {channel_name}", "=" * 60]
+          in_playlist = set()
 
-          in_playlist_ids = set()
-
-          # پردازش پلی‌لیست‌ها
-          for pl in playlists_info:
+          # 3. پردازش پلی‌لیست‌ها
+          for pl in playlists:
               pl_url = pl.get('url')
-              pl_title = pl.get('title', 'Unnamed Playlist').replace('/', '_')
+              pl_title = pl.get('title', 'Unnamed').replace('/', '_')
               if not pl_url:
                   continue
-
-              print(f"  📥 Fetching videos for playlist: {pl_title}")
-              videos = run_ytdlp(
-                  ["yt-dlp", "--flat-playlist", "--dump-json", pl_url],
-                  f"playlist '{pl_title}'"
-              )
-              if videos is None:
-                  tree_lines.append(f"\n📁 Playlist: {pl_title} (could not be loaded)")
+              print(f"  📥 Processing playlist: {pl_title}")
+              vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", pl_url], pl_title)
+              if vids is None:
+                  tree.append(f"\n📁 Playlist: {pl_title} (unavailable)")
                   continue
-              if not videos:
-                  tree_lines.append(f"\n📁 Playlist: {pl_title} (empty)")
+              if not vids:
+                  tree.append(f"\n📁 Playlist: {pl_title} (empty)")
                   continue
-
-              tree_lines.append(f"\n📁 Playlist: {pl_title} ({len(videos)} videos)")
-              for i, v in enumerate(videos):
-                  vid_id = v.get('id')
-                  if vid_id: in_playlist_ids.add(vid_id)
+              tree.append(f"\n📁 Playlist: {pl_title} ({len(vids)} videos)")
+              for i, v in enumerate(vids):
+                  if v.get('id'): in_playlist.add(v['id'])
+                  # ساخت عنوان کامل با برچسب Short در صورت کوتاه بودن
                   title = v.get('title', 'Untitled').strip()
-                  prefix = "   └──" if i == len(videos)-1 else "   ├──"
-                  tree_lines.append(f"{prefix} {title}")
+                  duration = v.get('duration')
+                  if duration is not None and duration <= 60:
+                      title += " (Short)"
+                  prefix = "   └──" if i == len(vids)-1 else "   ├──"
+                  tree.append(f"{prefix} {title}")
 
-          # ویدیوهای بدون پلی‌لیست
-          print(">> Fetching videos without playlist...")
-          all_videos = run_ytdlp(
-              ["yt-dlp", "--flat-playlist", "--dump-json", channel_url],
-              "channel videos"
-          )
+          # 4. ویدیوهای بدون پلی‌لیست
+          print(">> Fetching non-playlisted videos...")
+          all_vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", channel_url], "channel")
           unplaylisted = []
-          if all_videos:
-              for v in all_videos:
-                  vid_id = v.get('id')
-                  if vid_id and vid_id not in in_playlist_ids:
+          if all_vids:
+              for v in all_vids:
+                  if v.get('id') and v['id'] not in in_playlist:
                       unplaylisted.append(v)
           if unplaylisted:
-              tree_lines.append(f"\n📁 No Playlist ({len(unplaylisted)} videos)")
+              tree.append(f"\n📁 No Playlist ({len(unplaylisted)} videos)")
               for i, v in enumerate(unplaylisted):
                   title = v.get('title', 'Untitled').strip()
+                  duration = v.get('duration')
+                  if duration is not None and duration <= 60:
+                      title += " (Short)"
                   prefix = "   └──" if i == len(unplaylisted)-1 else "   ├──"
-                  tree_lines.append(f"{prefix} {title}")
+                  tree.append(f"{prefix} {title}")
 
-          if not playlists_info and not all_videos:
-              tree_lines.append("\n⚠️ No videos or playlists could be extracted from this channel.")
+          if not playlists and not all_vids:
+              tree.append("\n⚠️ Could not retrieve any video data for this channel.")
 
-          # ذخیره‌سازی اجباری فایل
-          os.makedirs("channel_lists", exist_ok=True)
-          safe_channel = channel_name.replace('/', '_')[:60]
-          filename = f"channel_lists/{safe_channel}_full_tree.txt"
-          with open(filename, 'w', encoding='utf-8') as f:
-              f.write("\n".join(tree_lines))
-          print(f"\n✅ File saved: {filename}")
-          print(f"Total unique videos accounted: {len(in_playlist_ids) + len(unplaylisted)}")
+          # 5. ذخیره فایل
+          safe_name = channel_name.replace('/', '_')[:60]
+          filepath = f"channel_lists/{safe_name}_full_tree.txt"
+          with open(filepath, "w", encoding="utf-8") as f:
+              f.write("\n".join(tree))
+          print(f"\n✅ File saved: {filepath}")
           PYEOF
         shell: bash
 
@@ -163,14 +141,14 @@ jobs:
             exit 0
           fi
           git commit -m "Update channel video list"
-          git push origin HEAD:${{ github.ref_name }} || {
-            echo "Push failed, trying rebase..."
+          if ! git push origin HEAD:${{ github.ref_name }}; then
+            echo "Push failed, attempting rebase..."
             git pull --rebase origin ${{ github.ref_name }}
             git push origin HEAD:${{ github.ref_name }}
-          }
+          fi
         shell: bash
 
-      - name: Show output file
+      - name: Show final tree
         run: |
           echo "========== FINAL TREE =========="
           find channel_lists -type f -name "*.txt" | while read f; do

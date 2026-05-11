@@ -75,6 +75,30 @@ jobs:
           tree = [f"Channel: {channel_name}", "=" * 60]
           in_playlist = set()
 
+          def add_video_lines(video, is_last):
+              """ساخت خطوط عنوان، لینک و تصویر کاور برای یک ویدیو"""
+              title = video.get('title', 'Untitled').strip()
+              duration = video.get('duration')
+              if duration is not None and duration <= 60:
+                  title += " (Short)"
+
+              video_url = video.get('url')
+              video_id = video.get('id')
+              if not video_url and video_id:
+                  video_url = f"https://www.youtube.com/watch?v={video_id}"
+              thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg" if video_id else ""
+
+              # پیشوند اصلی
+              prefix = "   └── " if is_last else "   ├── "
+              tree.append(f"{prefix}{title}")
+
+              # زیرشاخه‌ها (لینک و کاور)
+              sub_prefix = "       " if is_last else "   │   "
+              if video_url:
+                  tree.append(f"{sub_prefix}├── 🔗 {video_url}")
+              if thumbnail_url:
+                  tree.append(f"{sub_prefix}└── 🖼️ {thumbnail_url}")
+
           # 3. پردازش پلی‌لیست‌ها
           for pl in playlists:
               pl_url = pl.get('url')
@@ -92,13 +116,7 @@ jobs:
               tree.append(f"\n📁 Playlist: {pl_title} ({len(vids)} videos)")
               for i, v in enumerate(vids):
                   if v.get('id'): in_playlist.add(v['id'])
-                  # ساخت عنوان کامل با برچسب Short در صورت کوتاه بودن
-                  title = v.get('title', 'Untitled').strip()
-                  duration = v.get('duration')
-                  if duration is not None and duration <= 60:
-                      title += " (Short)"
-                  prefix = "   └──" if i == len(vids)-1 else "   ├──"
-                  tree.append(f"{prefix} {title}")
+                  add_video_lines(v, i == len(vids)-1)
 
           # 4. ویدیوهای بدون پلی‌لیست
           print(">> Fetching non-playlisted videos...")
@@ -111,12 +129,7 @@ jobs:
           if unplaylisted:
               tree.append(f"\n📁 No Playlist ({len(unplaylisted)} videos)")
               for i, v in enumerate(unplaylisted):
-                  title = v.get('title', 'Untitled').strip()
-                  duration = v.get('duration')
-                  if duration is not None and duration <= 60:
-                      title += " (Short)"
-                  prefix = "   └──" if i == len(unplaylisted)-1 else "   ├──"
-                  tree.append(f"{prefix} {title}")
+                  add_video_lines(v, i == len(unplaylisted)-1)
 
           if not playlists and not all_vids:
               tree.append("\n⚠️ Could not retrieve any video data for this channel.")

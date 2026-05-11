@@ -35,9 +35,8 @@ jobs:
         run: |
           set +e
           python3 << 'PYEOF'
-          import os, sys, json, subprocess, traceback
+          import os, sys, json, subprocess, traceback, html
 
-          # تضمین خروج امن
           try:
               raw_url = """${{ github.event.inputs.channel_url }}""".strip()
               os.makedirs("channel_lists", exist_ok=True)
@@ -60,12 +59,10 @@ jobs:
                       print(f"  ⚠️ {label} exception: {e}")
                       return None
 
-              # 1. دریافت پلی‌لیست‌ها
               print(">> Fetching playlists...")
               playlists = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", f"{channel_url}/playlists"], "playlists")
               playlists = playlists if playlists else []
 
-              # 2. حدس نام کانال
               channel_name = "Unknown Channel"
               if playlists:
                   channel_name = playlists[0].get('channel', channel_name)
@@ -81,6 +78,7 @@ jobs:
               in_playlist_ids = set()
 
               def add_video_md(video, indent="  "):
+                  """افزودن عنوان، لینک، تصویر کاور و توضیحات یک ویدیو"""
                   title = video.get('title', 'Untitled').strip()
                   duration = video.get('duration')
                   if duration is not None and duration <= 60:
@@ -92,14 +90,33 @@ jobs:
                       video_url = f"https://www.youtube.com/watch?v={video_id}"
 
                   thumbnail_url = f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg" if video_id else ""
+                  description = video.get('description')
 
+                  # عنوان
                   md_lines.append(f"{indent}- 🎬 **{title}**")
+
+                  # لینک یوتیوب
                   if video_url:
                       md_lines.append(f"{indent}    🔗 [Watch on YouTube]({video_url})")
-                  if thumbnail_url:
-                      md_lines.append(f"{indent}    ![Thumbnail]({thumbnail_url})")
 
-              # 3. پردازش هر پلی‌لیست
+                  # تصویر کاور با اندازه استاندارد ۳۲۰ پیکسل
+                  if thumbnail_url:
+                      md_lines.append(f'{indent}    <img src="{thumbnail_url}" width="320" alt="Thumbnail" />')
+
+                  # توضیحات (اگر وجود داشته باشد) به‌صورت نقل‌قول زیبا
+                  if description:
+                      # تبدیل خطوط به نقل‌قول (پیشوند > )
+                      desc_lines = description.splitlines()
+                      for dl in desc_lines:
+                          # هر خط را با > شروع می‌کنیم؛ خط خالی را نیز با > خالی می‌گذاریم تا فاصله بیفتد.
+                          md_lines.append(f"{indent}    > {dl}")
+                      # یک خط خالی بعد از نقل‌قول برای فاصله بصری
+                      md_lines.append("")
+                  else:
+                      # اگر توضیح نبود، باز هم یک خط خالی برای فاصله بین ویدیوها
+                      md_lines.append("")
+
+              # پردازش پلی‌لیست‌ها
               for pl in playlists:
                   pl_url = pl.get('url')
                   pl_title = pl.get('title', 'Unnamed').replace('/', '_')
@@ -119,7 +136,7 @@ jobs:
                       if v.get('id'): in_playlist_ids.add(v['id'])
                       add_video_md(v, indent="  ")
 
-              # 4. ویدیوهای بدون پلی‌لیست
+              # ویدیوهای بدون پلی‌لیست
               print(">> Fetching non-playlisted videos...")
               all_vids = safe_run(["yt-dlp", "--flat-playlist", "--dump-json", channel_url], "channel")
               unplaylisted = []
@@ -133,9 +150,9 @@ jobs:
                       add_video_md(v, indent="  ")
 
               if not playlists and not all_vids:
-                  md_lines.append("\n⚠️ Could not retrieve any video data for this channel. Please check the URL or channel availability.\n")
+                  md_lines.append("\n⚠️ Could not retrieve any video data for this channel.\n")
 
-              # 5. ذخیره فایل Markdown
+              # ذخیره‌سازی
               safe_name = channel_name.replace('/', '_')[:60]
               filepath = f"channel_lists/{safe_name}_full_tree.md"
               with open(filepath, "w", encoding="utf-8") as f:
@@ -143,13 +160,12 @@ jobs:
               print(f"\n✅ Markdown file saved: {filepath}")
 
           except Exception as e:
-              # در صورت هر خطای پیش‌بینی‌نشده، آن را در فایلی یادداشت کن و با کد صفر خارج شو
               error_msg = f"# ❌ Unexpected Error\n\n```\n{traceback.format_exc()}\n```"
               with open("channel_lists/ERROR_UNEXPECTED.md", "w", encoding="utf-8") as f:
                   f.write(error_msg)
               print(f"Unexpected error: {traceback.format_exc()}")
           finally:
-              sys.exit(0)   # همیشه با 0 خارج شو
+              sys.exit(0)
           PYEOF
         shell: bash
 
@@ -163,7 +179,7 @@ jobs:
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "Update channel video list (Markdown with thumbnails)"
+          git commit -m "Update channel video list (Markdown with thumbnails & description)"
           if ! git push origin HEAD:${{ github.ref_name }}; then
             echo "Push failed, attempting rebase..."
             git pull --rebase origin ${{ github.ref_name }}

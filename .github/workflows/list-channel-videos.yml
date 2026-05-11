@@ -26,167 +26,154 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y python3-pip curl jq
+          sudo apt-get install -y python3-pip curl jq || true
 
       - name: Install latest yt-dlp
-        run: pip3 install --break-system-packages "yt-dlp[default]"
+        run: pip3 install --break-system-packages "yt-dlp[default]" || true
 
       - name: Extract full playlist tree
         run: |
+          set +e  # اجازه ادامه‌ی اجرا با وجود خطاهای غیرصفر
           python3 << 'PYEOF'
           import os, sys, json, subprocess
           from collections import defaultdict
 
-          raw_url = "${{ github.event.inputs.channel_url }}".strip()
+          raw_url = """${{ github.event.inputs.channel_url }}""".strip()
           if not raw_url:
-              print("خطا: لینک کانال خالی است.")
-              sys.exit(1)
-
-          # تمیزسازی آدرس (حذف / اضافی در انتها)
+              print("WARNING: Channel URL is empty.")
+              os.makedirs("channel_lists", exist_ok=True)
+              with open("channel_lists/EMPTY_URL.txt", "w", encoding="utf-8") as f:
+                  f.write("No channel URL was provided.")
+              sys.exit(0)
+              
           channel_url = raw_url.rstrip('/')
 
-          # ===== 1. دریافت پلی‌لیست‌ها (در صورت وجود) =====
-          playlists_info = []
-          print(">> تلاش برای دریافت پلی‌لیست‌های کانال...")
-          try:
-              playlists_cmd = ["yt-dlp", "--flat-playlist", "--dump-json",
-                               f"{channel_url}/playlists"]
-              res = subprocess.run(playlists_cmd, capture_output=True, text=True)
-              if res.returncode == 0:
-                  playlists_info = [json.loads(line) for line in res.stdout.splitlines() if line.strip()]
-                  print(f">> {len(playlists_info)} پلی‌لیست پیدا شد.")
-              else:
-                  print(f">> دریافت پلی‌لیست‌ها با خطا مواجه شد (کد {res.returncode}).")
-                  print(f"    پیام خطا: {res.stderr.strip()[-300:]}")
-                  print(">> ادامه با فرض نداشتن پلی‌لیست.")
-          except Exception as e:
-              print(f">> خطای غیرمنتظره در دریافت پلی‌لیست‌ها: {e}")
+          # تابع کمکی برای اجرای امن yt-dlp
+          def run_ytdlp(args, description=""):
+              """اجرای یک دستور yt-dlp و برگرداندن لیست JSON یا None در صورت شکست"""
+              try:
+                  result = subprocess.run(args, capture_output=True, text=True, timeout=120)
+                  if result.returncode != 0:
+                      print(f"  ⚠️ {description} returned code {result.returncode}: {result.stderr.strip()[-100:]}")
+                      return None
+                  return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+              except Exception as e:
+                  print(f"  ⚠️ Exception in {description}: {e}")
+                  return None
 
-          # استخراج نام کانال
+          playlists_info = []
+          print(">> Attempting to fetch channel playlists...")
+          pl_data = run_ytdlp(
+              ["yt-dlp", "--flat-playlist", "--dump-json", f"{channel_url}/playlists"],
+              "playlists fetch"
+          )
+          if pl_data is not None:
+              playlists_info = pl_data
+              print(f">> Found {len(playlists_info)} playlists.")
+          else:
+              print(">> Could not fetch playlists. Continuing with standard videos only.")
+
+          # تلاش برای یافتن نام کانال
           channel_name = "Unknown Channel"
           if playlists_info:
               channel_name = playlists_info[0].get('channel', channel_name)
           else:
-              # اگر پلی‌لیستی نبود، سعی می‌کنیم از ویدیوها نام کانال را بیابیم
-              try:
-                  test_cmd = ["yt-dlp", "--flat-playlist", "--dump-json", channel_url]
-                  test_res = subprocess.run(test_cmd, capture_output=True, text=True)
-                  if test_res.returncode == 0:
-                      first_video = next((json.loads(line) for line in test_res.stdout.splitlines() if line.strip()), None)
-                      if first_video:
-                          channel_name = first_video.get('channel', channel_name)
-              except:
-                  pass
+              # یک بار ویدیوهای کانال را برای نام بررسی کنیم
+              probe = run_ytdlp(
+                  ["yt-dlp", "--flat-playlist", "--dump-json", channel_url],
+                  "channel probe"
+              )
+              if probe and probe[0].get('channel'):
+                  channel_name = probe[0]['channel']
 
-          # ===== 2. ساخت درخت =====
           tree_lines = []
           tree_lines.append(f"Channel: {channel_name}")
           tree_lines.append("=" * 60)
 
           in_playlist_ids = set()
 
-          # 2 الف) پلی‌لیست‌ها
+          # پردازش پلی‌لیست‌ها
           for pl in playlists_info:
               pl_url = pl.get('url')
-              pl_title = pl.get('title', 'بدون نام').replace('/', '_')
+              pl_title = pl.get('title', 'Unnamed Playlist').replace('/', '_')
               if not pl_url:
                   continue
 
-              print(f"  📥 دریافت ویدیوهای پلی‌لیست: {pl_title}")
-              try:
-                  videos_cmd = ["yt-dlp", "--flat-playlist", "--dump-json", pl_url]
-                  vres = subprocess.run(videos_cmd, capture_output=True, text=True)
-                  if vres.returncode != 0:
-                      print(f"    ⚠️ خطا در دریافت ویدیوهای '{pl_title}' – نادیده گرفته شد.")
-                      stderr_snippet = vres.stderr.strip()[-200:] if vres.stderr else "(بدون جزئیات)"
-                      print(f"    کد خطا: {vres.returncode}, خطا: {stderr_snippet}")
-                      continue
-                  videos = [json.loads(line) for line in vres.stdout.splitlines() if line.strip()]
-              except Exception as e:
-                  print(f"    ⚠️ خطا: {e}")
+              print(f"  📥 Fetching videos for playlist: {pl_title}")
+              videos = run_ytdlp(
+                  ["yt-dlp", "--flat-playlist", "--dump-json", pl_url],
+                  f"playlist '{pl_title}'"
+              )
+              if videos is None:
+                  tree_lines.append(f"\n📁 Playlist: {pl_title} (could not be loaded)")
                   continue
-
               if not videos:
-                  tree_lines.append(f"\n📁 Playlist: {pl_title} (خالی)")
+                  tree_lines.append(f"\n📁 Playlist: {pl_title} (empty)")
                   continue
 
-              tree_lines.append(f"\n📁 Playlist: {pl_title} ({len(videos)} ویدیو)")
+              tree_lines.append(f"\n📁 Playlist: {pl_title} ({len(videos)} videos)")
               for i, v in enumerate(videos):
                   vid_id = v.get('id')
-                  if vid_id:
-                      in_playlist_ids.add(vid_id)
+                  if vid_id: in_playlist_ids.add(vid_id)
                   title = v.get('title', 'Untitled').strip()
-                  prefix = "   └──" if i == len(videos) - 1 else "   ├──"
+                  prefix = "   └──" if i == len(videos)-1 else "   ├──"
                   tree_lines.append(f"{prefix} {title}")
 
-          # 2 ب) ویدیوهای بدون پلی‌لیست (از برگه Videos کانال)
-          print(">> دریافت ویدیوهای بدون پلی‌لیست...")
-          try:
-              all_cmd = ["yt-dlp", "--flat-playlist", "--dump-json", channel_url]
-              all_res = subprocess.run(all_cmd, capture_output=True, text=True)
-              all_videos = []
-              if all_res.returncode == 0:
-                  all_videos = [json.loads(line) for line in all_res.stdout.splitlines() if line.strip()]
-              else:
-                  print(f"⚠️ دریافت ویدیوهای کانال با خطا مواجه شد: {all_res.stderr.strip()[-200:]}")
-          except Exception as e:
-              print(f"⚠️ خطا در دریافت ویدیوهای کانال: {e}")
-              all_videos = []
-
+          # ویدیوهای بدون پلی‌لیست
+          print(">> Fetching videos without playlist...")
+          all_videos = run_ytdlp(
+              ["yt-dlp", "--flat-playlist", "--dump-json", channel_url],
+              "channel videos"
+          )
           unplaylisted = []
-          for v in all_videos:
-              vid_id = v.get('id')
-              if vid_id and vid_id not in in_playlist_ids:
-                  unplaylisted.append(v)
-
+          if all_videos:
+              for v in all_videos:
+                  vid_id = v.get('id')
+                  if vid_id and vid_id not in in_playlist_ids:
+                      unplaylisted.append(v)
           if unplaylisted:
-              tree_lines.append(f"\n📁 No Playlist ({len(unplaylisted)} ویدیو)")
+              tree_lines.append(f"\n📁 No Playlist ({len(unplaylisted)} videos)")
               for i, v in enumerate(unplaylisted):
                   title = v.get('title', 'Untitled').strip()
-                  prefix = "   └──" if i == len(unplaylisted) - 1 else "   ├──"
+                  prefix = "   └──" if i == len(unplaylisted)-1 else "   ├──"
                   tree_lines.append(f"{prefix} {title}")
 
-          # اگر نه پلی‌لیستی بود و نه ویدیویی، پیام مناسب بدهیم
           if not playlists_info and not all_videos:
-              tree_lines.append("\n⚠️ هیچ ویدیویی در این کانال پیدا نشد.")
+              tree_lines.append("\n⚠️ No videos or playlists could be extracted from this channel.")
 
-          # ===== 3. ذخیره‌سازی =====
-          safe_channel = channel_name.replace('/', '_')[:60]
+          # ذخیره‌سازی اجباری فایل
           os.makedirs("channel_lists", exist_ok=True)
+          safe_channel = channel_name.replace('/', '_')[:60]
           filename = f"channel_lists/{safe_channel}_full_tree.txt"
           with open(filename, 'w', encoding='utf-8') as f:
               f.write("\n".join(tree_lines))
-
-          print(f"\n✅ فایل '{filename}' ذخیره شد.")
-          print(f"تعداد کل ویدیوها: {len(in_playlist_ids) + len(unplaylisted)}")
+          print(f"\n✅ File saved: {filename}")
+          print(f"Total unique videos accounted: {len(in_playlist_ids) + len(unplaylisted)}")
           PYEOF
         shell: bash
 
       - name: Commit and push list file
         run: |
+          set +e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           git add channel_lists/
-
           if git diff --cached --quiet; then
-            echo "هیچ تغییری برای commit وجود ندارد."
+            echo "No changes to commit."
             exit 0
           fi
-
-          git commit -m "Add full playlist tree for ${{ github.event.inputs.channel_url }}"
-
-          if ! git push origin HEAD:${{ github.ref_name }}; then
-            echo "Push اولیه ناموفق، تلاش مجدد با rebase..."
+          git commit -m "Update channel video list"
+          git push origin HEAD:${{ github.ref_name }} || {
+            echo "Push failed, trying rebase..."
             git pull --rebase origin ${{ github.ref_name }}
             git push origin HEAD:${{ github.ref_name }}
-          fi
+          }
         shell: bash
 
-      - name: Show final tree
+      - name: Show output file
         run: |
-          echo "========== درخت نمایشی =========="
-          find channel_lists -type f -name "*_full_tree.txt" | while read f; do
+          echo "========== FINAL TREE =========="
+          find channel_lists -type f -name "*.txt" | while read f; do
             echo "--- $f ---"
             cat "$f"
           done

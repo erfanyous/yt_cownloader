@@ -1,0 +1,109 @@
+Channel: Unknown Channel
+============================================================
+
+📁 Playlist: How to Build a Fixed Wing Drone? (2 videos)
+   ├── Why Everyone Uses ELRS Now | Complete Beginner Guide
+   └── How to Build a Fixed Wing Drone? | Electronics Basics
+
+📁 Playlist: Tech (19 videos)
+   ├── Unlock the Power of Long-Range FPV with NEW ELRS RX: BetaFPV SuperP 14CH Diversity Receiver
+   ├── [Deleted video]
+   ├── Exploring the GM3 Walksnail Gimbal by CADDX: Features & Installation on Fixed Wing Aircraft
+   ├── Flying a 3D Printed VTOL UAV | Stallion with GM3 Gimbal
+   ├── Flying a 3D Printed Fixed Wing Drone | Talon 1400 V2
+   ├── How to Build a 3D Printed Fixed-Wing UAV? | Talon 1400 Build
+   ├── How to Build a Fixed Wing Drone? | Electronics Basics
+   ├── Building a Fixed-Wing Drone with 3D Printing | Stallion
+   ├── [Private video]
+   ├── 3D Printing Aircraft - How to Do It Right? | Full Guide
+   ├── Flying a 3D Printed Fixed Wing UAV | Moose
+   ├── Build Your Own 3D Printed Fixed-Wing Drone | Moose
+   ├── Flying a 3D-Printed Fixed-Wing UAV | Stork
+   ├── Is This the Future of FPV? | WiFiLink 2
+   ├── [Private video]
+   ├── 3D Printed Fixed Wing – Full Build | Stork
+   ├── Flying a 3D Printed VTOL UAV | Stork
+   ├── [Deleted video]
+   └── How to Build a Fixed Wing Drone?  | ELRS & RC Link Guide
+
+📁 Playlist: Flights (29 videos)
+   ├── [Private video]
+   ├── [Private video]
+   ├── [Private video]
+   ├── [Private video]
+   ├── [Private video]
+   ├── Flightory Talon 1400 - Automatic Take Off (Short)
+   ├── Flightory Talon 1400 - Fly By (Short)
+   ├── Flightory Talon 1400 - Landing (Short)
+   ├── Flightory Talon 1400 - Walksnail DVR
+   ├── Flightory Talon 1400 - Runcam 2 Footage (Short)
+   ├── Flightory Talon 1400 - Short Landing (Short)
+   ├── Flightory Lark - Landing (Short)
+   ├── FLIGHTORY Lark - Flights
+   ├── FLIGHTORY Lark - Walksnail DVR
+   ├── [Private video]
+   ├── FLIGHTORY Stallion - Takeoffs, Landings, Flyovers
+   ├── FLIGHTORY Stallion - Walksnail DVR
+   ├── FLIGHTORY Stallion VTOL - Takeoffs, Transitions, Landings, Flyovers
+   ├── FLIGHTORY Stallion VTOL - Walksnail DVR
+   ├── FLIGHTORY Stallion VTOL - 3D Printed Fixed Wing Aircraft (Short)
+   ├── FLIGHTORY Super Stingray - 3D Printed Aircraft Test Flights
+   ├── FLIGHTORY Super Stingray - Walksnail DVR
+   ├── FLIGHTORY Super Stingray VTOL - 3D Printed UAV Flight Display
+   ├── FLIGHTORY Super Stingray VTOL - Walksnail DVR
+   ├── Flying a 3D Printed VTOL UAV | Stallion with GM3 Gimbal
+   ├── Flying a 3D Printed Fixed Wing Drone | Talon 1400 V2
+   ├── Flying a 3D Printed Fixed Wing UAV | Moose
+   ├── Flying a 3D-Printed Fixed-Wing UAV | Stork
+   └── Flying a 3D Printed VTOL UAV | Stork
+
+📁 Playlist: Project presentations (10 videos)
+   ├── [Private video]
+   ├── [Private video]
+   ├── [Private video]
+   ├── My New Ultralight FPV Wing - Mini Plank
+   ├── How I Built This AMAZING 3D Printed FPV Wing? | ULTIMATE Build Guide and FLIGHT Coverage
+   ├── How to Build a 3D Printed Fixed-Wing UAV? | Talon 1400 Build
+   ├── Building a Fixed-Wing Drone with 3D Printing | Stallion
+   ├── Build Your Own 3D Printed Fixed-Wing Drone | Moose
+   ├── [Private video]
+   └── 3D Printed Fixed Wing – Full Build | Stork
+
+📁 No Playlist (37 videos)
+   ├── FLIGHTORY Lark - Automatic Takeoff (Short)
+   ├── Super Stingray in the air ✈️ #fpv #vtol #drone #rcplane
+   ├── Stallion ready for mission 🛫 #drone #fpv #uav #3dprinting
+   ├── Cruising with Stallion ✈️ #drone #fpv #aviation #3dprinting
+   ├── This Fixed Wing Drone Snaps Together in Seconds!
+   ├── When Fixed Wing Drones Meet 3D Printing 🚀 #shorts
+   ├── 3D Printed VTOL Wing #fpv #drone #3dprinting #tech
+   ├── Ultimate 3D Printed Fixed Wing UAV
+   ├── Print your Talon and see you in the sky!
+   ├── Ultralight 3D PRINTED FPV WING
+   ├── 3D PRINTED UAV Wing Mount
+   ├── NEW FPV WING made with EPP FOAM
+   ├── 1800mm COMPOSITE UAV Wing
+   ├── 3D Printed Fixed Wing UAV Assembly
+   ├── 3D PRINTED FPV AIRCRAFT
+   ├── FPV DRONE Footage in 3 ANGLES
+   ├── MASSIVE 2,5M UAV Wing LOW PASS
+   ├── 3D PRINTING Composite MOLD
+   ├── FPV Wing AUTOMATIC Takeoff
+   ├── FPV Wing AIR TO AIR SHOT
+   ├── 3D Printed FPV Wing Automatic Takeoff ✈️
+   ├── Making FUSELAGE with CNC HOTWIRE CUTTER
+   ├── Self made CNC HOTWIRE CUTTER
+   ├── Maiden flight ✈️ FPV Arrowhead plane #shorts
+   ├── Drone shot ✈️ RC FPV plane #shorts
+   ├── New FPV plane is almost ready to fly✈️ #shorts
+   ├── Building RC FPV Plane. Wingtips ✈️ #shorts
+   ├── L39 Albatros Breitling RC Plane ✈️🔥
+   ├── Projekt Nowego Plotera Termicznego już na kanale 🔥 #shorts
+   ├── Building RC FPV Plane. Wing servos with covers ✈️ #shorts
+   ├── Building RC FPV Plane. DJI Action 2 📷 FPV Plane Mount ✈️ #shorts
+   ├── Building RC FPV Plane. Wing servos assembly ✈️ #shorts #aviation
+   ├── Building RC FPV Plane. V TAIL assembly ✈️ #shorts
+   ├── Building RC FPV Plane. FPV PLANE NOSE SECTION PRINT ✈️ LW-PLA #shorts
+   ├── Building RC FPV Plane. SLIM WING SERVO FRAME MOUNT ✈️ #shorts
+   ├── Building RC FPV Plane. FPV camera mounted in nose section ✈️ #shorts #aviation
+   └── PZL 55 - Low Pass ✈️ #shorts #rcplane
